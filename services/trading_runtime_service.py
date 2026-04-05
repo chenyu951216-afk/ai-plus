@@ -56,6 +56,9 @@ class TradingRuntimeService:
         self.review_judge = AIReviewJudgeService()
         self.optimizer = OptimizationApplyService()
 
+        self._scan_offset = 0
+        self._cycle_count = 0
+
     def _run_daily_review_loop(self) -> Dict[str, Any]:
         if not settings.enable_daily_gpt_review:
             return {"enabled": False, "reason": "daily_review_disabled"}
@@ -102,6 +105,7 @@ class TradingRuntimeService:
         for round_index in range(1, settings.gpt_deliberation_rounds + 1):
             if not working_judge.get("needs_more_discussion"):
                 break
+
             discussion = self.gpt.discuss_disagreement(
                 digest,
                 working_review,
@@ -131,6 +135,7 @@ class TradingRuntimeService:
             consensus["final_recommendations"] = list(
                 working_judge.get("accepted_recommendations", [])
             )
+
             if not discussion.get("needs_more_discussion", False) and not working_judge.get("needs_more_discussion"):
                 break
 
@@ -158,6 +163,23 @@ class TradingRuntimeService:
             return {"entry_buffer": 0.06, "max_soft_entries": 1}
         return {"entry_buffer": 0.0, "max_soft_entries": 0}
 
+    def _select_symbols_for_cycle(self, symbols: List[str]) -> List[str]:
+        if not symbols:
+            return []
+
+        batch_size = int(getattr(settings, "scan_batch_size_per_cycle", 8) or 8)
+        batch_size = max(3, min(batch_size, len(symbols)))
+
+        start = self._scan_offset % len(symbols)
+        end = start + batch_size
+        if end <= len(symbols):
+            selected = symbols[start:end]
+        else:
+            selected = symbols[start:] + symbols[: end - len(symbols)]
+
+        self._scan_offset = (start + batch_size) % len(symbols)
+        return selected
+
     def _build_watch_row(
         self,
         symbol: str,
@@ -167,7 +189,8 @@ class TradingRuntimeService:
         leverage_decision: Dict[str, Any],
         sizing_decision: Dict[str, Any],
         preflight: Dict[str, Any],
-        reason: str,
+        decision_reason: str,
+        block_reason: str,
     ) -> Dict[str, Any]:
         return {
             "symbol": symbol,
@@ -178,7 +201,8 @@ class TradingRuntimeService:
             "market_regime": features.get("market_regime"),
             "entry_decision": {
                 **entry_decision,
-                "reason": reason,
+                "decision_reason": decision_reason,
+                "block_reason": block_reason,
             },
             "leverage_decision": leverage_decision,
             "sizing_decision": sizing_decision,
@@ -218,7 +242,10 @@ class TradingRuntimeService:
 
         desired_margin = max(available_usdt * margin_pct * size_multiplier, 1.0)
         desired_notional = desired_margin * max(leverage, 1)
-        desired_size = round(max(desired_notional / max(last_price, 1e-9), settings.lifecycle_min_position_size), 8)
+        desired_size = round(
+            max(desired_notional / max(last_price, 1e-9), settings.lifecycle_min_position_size),
+            8,
+        )
 
         if hasattr(self.preflight, "preflight"):
             result = self.preflight.preflight(symbol, desired_size, last_price)
@@ -238,6 +265,8 @@ class TradingRuntimeService:
         return {"blocked": False, "reason": "preflight_unavailable"}
 
     def run_once(self) -> Dict[str, Any]:
+        self._cycle_count += 1
+
         account_summary = self.account.summary()
         pos_mode = account_summary.get("pos_mode", "net")
         positions = self.position_sync.sync() if settings.enable_position_sync else []
@@ -250,7 +279,13 @@ class TradingRuntimeService:
 
         autonomy = self.audit.run()
         symbols = self.pipeline.get_top_symbols()
-        scans = self.pipeline.scan(symbols)
+        selected_symbols = self._select_symbols_for_cycle(symbols)
+
+        try:
+            scans = self.pipeline.scan(selected_symbols)
+        except Exception as exc:
+            self.logger.exception("scan batch failed: symbols=%s error=%s", selected_symbols, exc)
+            scans = []
 
         bootstrap = self._bootstrap_softness(trade_summary)
         feature_map: Dict[str, Dict[str, Any]] = {}
@@ -286,7 +321,10 @@ class TradingRuntimeService:
             sizing_decision = self.ai.decide_sizing(features)
 
             confidence = float(entry_decision.get("confidence", 0.0) or 0.0)
-            threshold = float(entry_decision.get("effective_threshold", settings.min_trade_confidence) or settings.min_trade_confidence)
+            threshold = float(
+                entry_decision.get("effective_threshold", settings.min_trade_confidence)
+                or settings.min_trade_confidence
+            )
 
             soft_enter = (
                 entry_decision.get("action") != "enter"
@@ -319,6 +357,12 @@ class TradingRuntimeService:
             preflight = self._run_preflight(candidate, account_summary, pos_mode)
             candidate["preflight"] = preflight
 
+            block_reason = ""
+            if candidate_action != "enter":
+                block_reason = "ai_not_ready"
+            elif preflight.get("blocked"):
+                block_reason = preflight.get("reason", "preflight_blocked")
+
             watchlist.append(
                 self._build_watch_row(
                     symbol=symbol,
@@ -328,12 +372,14 @@ class TradingRuntimeService:
                     leverage_decision=leverage_decision,
                     sizing_decision=sizing_decision,
                     preflight=preflight,
-                    reason=decision_reason,
+                    decision_reason=decision_reason,
+                    block_reason=block_reason,
                 )
             )
 
             self.logger.info(
-                "[SCAN] %s action=%s raw_action=%s conf=%.4f thr=%.4f side=%s preflight=%s reason=%s",
+                "[SCAN] cycle=%s symbol=%s action=%s raw_action=%s conf=%.4f thr=%.4f side=%s preflight=%s reason=%s",
+                self._cycle_count,
                 symbol,
                 candidate_action,
                 entry_decision.get("action"),
@@ -344,7 +390,7 @@ class TradingRuntimeService:
                 decision_reason,
             )
 
-            if candidate_action == "enter":
+            if candidate_action == "enter" and not preflight.get("blocked"):
                 execution_candidates.append(candidate)
 
         watchlist.sort(key=lambda x: float(x["entry_decision"].get("confidence", 0.0)), reverse=True)
@@ -359,8 +405,25 @@ class TradingRuntimeService:
             for candidate in execution_candidates[:allow_new_entries]:
                 execution = self.order_exec.execute(candidate, pos_mode, account_summary)
                 executed_orders.append(execution)
+                self.logger.info(
+                    "[EXECUTE] cycle=%s symbol=%s mode=%s final_size=%s entry_price=%s preflight=%s",
+                    self._cycle_count,
+                    execution.get("symbol"),
+                    execution.get("execution_mode"),
+                    execution.get("final_size"),
+                    execution.get("entry_price"),
+                    candidate.get("preflight", {}).get("reason", "ok"),
+                )
                 if execution.get("execution_mode") != "blocked":
-                    protective_orders.append(self.protect.register(execution, pos_mode))
+                    protective = self.protect.register(execution, pos_mode)
+                    protective_orders.append(protective)
+                    self.logger.info(
+                        "[PROTECT] cycle=%s symbol=%s tp=%s sl=%s",
+                        self._cycle_count,
+                        protective.get("symbol"),
+                        protective.get("tp"),
+                        protective.get("sl"),
+                    )
         elif risk_row.get("blocked"):
             self.logger.warning("new entries blocked by risk guard: %s", risk_row)
 
@@ -395,9 +458,18 @@ class TradingRuntimeService:
                 "daily_review_enabled": settings.enable_daily_gpt_review,
                 "daily_review_reason": daily_review.get("reason", "ok"),
             },
+            "scan_meta": {
+                "cycle": self._cycle_count,
+                "selected_symbols": selected_symbols,
+                "selected_count": len(selected_symbols),
+                "total_top_symbols": len(symbols),
+                "bootstrap_entry_buffer": bootstrap["entry_buffer"],
+                "bootstrap_max_soft_entries": bootstrap["max_soft_entries"],
+            },
             "system_notes": [
                 "初期進場條件已放寬，但只作用在交易候選，不直接放鬆學習保護。",
                 "小樣本保護、異常日保護、連敗保護、GPT 建議緩變保護仍保留。",
+                "已改為分批輪掃 top symbols，避免一次全掃造成 429。",
                 f"ENABLE_LIVE_EXECUTION={settings.enable_live_execution}",
                 f"OKX_IS_DEMO={settings.okx_is_demo}",
                 f"KILL_SWITCH={settings.kill_switch}",
@@ -407,13 +479,17 @@ class TradingRuntimeService:
                 f"GPT_MODEL={settings.gpt_model}",
                 f"BOOTSTRAP_ENTRY_BUFFER={bootstrap['entry_buffer']}",
                 f"BOOTSTRAP_MAX_SOFT_ENTRIES={bootstrap['max_soft_entries']}",
-                f"consecutive_losses={trade_summary['consecutive_losses']}/{settings.max_consecutive_losses_before_pause}",
+                f"consecutive_losses={trade_summary.get('consecutive_losses', 0)}/{settings.max_consecutive_losses_before_pause}",
+                f"SCAN_BATCH={len(selected_symbols)}/{len(symbols)}",
             ],
         }
 
         self.dashboard.update(payload)
         self.logger.info(
-            "step40 done. watch=%s positions=%s executed=%s autonomy=%.2f risk_blocked=%s daily_review=%s gpt=%s",
+            "step40 done. cycle=%s scanned=%s/%s watch=%s positions=%s executed=%s autonomy=%.2f risk_blocked=%s daily_review=%s gpt=%s",
+            self._cycle_count,
+            len(selected_symbols),
+            len(symbols),
             len(watchlist),
             len(positions),
             len(executed_orders),
