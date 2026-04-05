@@ -1,6 +1,9 @@
 from typing import Dict, Any
+import time
+
 from clients.okx_client import OKXClient
 from config.settings import settings
+
 
 class AccountService:
     def __init__(self) -> None:
@@ -20,4 +23,18 @@ class AccountService:
             available = float(row.get("adjEq", 0.0))
         except (TypeError, ValueError):
             equity, available = 0.0, 0.0
-        return {"equity": equity, "available": available, "used_margin": max(equity - available, 0.0)}
+        return {
+            "equity": equity,
+            "available": available,
+            "used_margin": max(equity - available, 0.0),
+        }
+
+    def summary(self) -> Dict[str, Any]:
+        account = self.get_account_summary()
+        return {
+            "equity": float(account.get("equity", 0.0)),
+            "available": float(account.get("available", 0.0)),
+            "used_margin": float(account.get("used_margin", 0.0)),
+            "timestamp": int(time.time()),
+            "credentials_ready": self.credentials_ready(),
+        }
