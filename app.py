@@ -1,4 +1,8 @@
 import logging
+import os
+import threading
+
+from flask import Flask, jsonify
 
 from memory.backup_memory import ProjectMemoryBackup
 from services.runtime_loop_service import RuntimeLoopService
@@ -8,8 +12,11 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
+logger = logging.getLogger("app")
+app = Flask(__name__)
 
-def main() -> None:
+
+def _write_step40_backup() -> None:
     backup = ProjectMemoryBackup()
     backup.add_record(
         step_title="Step 40 - 試跑前收尾整合版",
@@ -41,7 +48,45 @@ def main() -> None:
         ),
         tags=["step40", "trial_run", "lifecycle", "tp1_tp2", "break_even", "trailing_refresh"],
     )
-    RuntimeLoopService().run_forever()
+
+
+def _run_runtime_loop() -> None:
+    try:
+        logger.info("Starting trading runtime loop thread.")
+        RuntimeLoopService().run_forever()
+    except Exception:
+        logger.exception("Runtime loop crashed.")
+
+
+@app.route("/")
+def home():
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "okx-ai-trading-bot",
+            "message": "runtime loop is running in background",
+        }
+    )
+
+
+@app.route("/health")
+def health():
+    return jsonify({"status": "healthy"})
+
+
+def main() -> None:
+    _write_step40_backup()
+
+    runtime_thread = threading.Thread(
+        target=_run_runtime_loop,
+        daemon=True,
+        name="runtime-loop-thread",
+    )
+    runtime_thread.start()
+
+    port = int(os.environ.get("PORT", "8080"))
+    logger.info("Starting web server on 0.0.0.0:%s", port)
+    app.run(host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
