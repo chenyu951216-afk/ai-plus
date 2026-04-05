@@ -16,23 +16,24 @@ class OKXClient:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
         self.session = requests.Session()
-        self.base_url = settings.okx_base_url
+        self.base_url = settings.okx_base_url.rstrip("/")
 
     def _timestamp(self) -> str:
         return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     def _sign(self, timestamp: str, method: str, request_path: str, body: str) -> str:
         message = f"{timestamp}{method.upper()}{request_path}{body}"
-        mac = hmac.new(settings.okx_api_secret.encode(), message.encode(), sha256)
+        mac = hmac.new(settings.okx_api_secret.encode("utf-8"), message.encode("utf-8"), sha256)
         return base64.b64encode(mac.digest()).decode()
 
-    def _private_headers(self, method: str, path: str, body: str = "") -> Dict[str, str]:
+    def _private_headers(self, method: str, signed_path: str, body: str = "") -> Dict[str, str]:
         ts = self._timestamp()
         headers = {
             "OK-ACCESS-KEY": settings.okx_api_key,
-            "OK-ACCESS-SIGN": self._sign(ts, method, path, body),
+            "OK-ACCESS-SIGN": self._sign(ts, method, signed_path, body),
             "OK-ACCESS-TIMESTAMP": ts,
             "OK-ACCESS-PASSPHRASE": settings.okx_api_passphrase,
+            "Content-Type": "application/json",
         }
         if settings.okx_is_demo:
             headers["x-simulated-trading"] = "1"
@@ -52,19 +53,22 @@ class OKXClient:
         if method_upper == "GET":
             query_string = urlencode(params, doseq=True)
             signed_path = f"{path}?{query_string}" if query_string else path
+            headers = self._private_headers(method_upper, signed_path) if private else {}
 
             response = self.session.get(
                 url,
                 params=params,
-                headers=self._private_headers(method_upper, signed_path) if private else {},
+                headers=headers,
                 timeout=20,
             )
         else:
             body = json.dumps(params, separators=(",", ":")) if params else ""
+            headers = self._private_headers(method_upper, path, body) if private else {"Content-Type": "application/json"}
+
             response = self.session.post(
                 url,
                 data=body,
-                headers=self._private_headers(method_upper, path, body) if private else {},
+                headers=headers,
                 timeout=20,
             )
 
@@ -101,6 +105,7 @@ class OKXClient:
             "GET",
             "/api/v5/market/tickers",
             params={"instType": settings.instrument_type},
+            private=False,
         ).get("data", [])
 
     def get_instruments(self) -> List[Dict[str, Any]]:
@@ -108,6 +113,7 @@ class OKXClient:
             "GET",
             "/api/v5/public/instruments",
             params={"instType": settings.instrument_type},
+            private=False,
         ).get("data", [])
 
     def get_candles(self, inst_id: str, bar: str, limit: int) -> List[List[Any]]:
@@ -115,6 +121,7 @@ class OKXClient:
             "GET",
             "/api/v5/market/candles",
             params={"instId": inst_id, "bar": bar, "limit": str(limit)},
+            private=False,
         ).get("data", [])
 
     def set_leverage(
@@ -122,9 +129,13 @@ class OKXClient:
         inst_id: str,
         leverage: int,
         margin_mode: str = "cross",
-        pos_side: str | None = None,
+        pos_side: Optional[str] = None,
     ) -> Dict[str, Any]:
-        payload = {"instId": inst_id, "lever": str(leverage), "mgnMode": margin_mode}
+        payload = {
+            "instId": inst_id,
+            "lever": str(leverage),
+            "mgnMode": margin_mode,
+        }
         if pos_side:
             payload["posSide"] = pos_side
         return self._request("POST", "/api/v5/account/set-leverage", params=payload, private=True)
@@ -133,10 +144,10 @@ class OKXClient:
         self,
         inst_id: str,
         side: str,
-        pos_side: str | None,
+        pos_side: Optional[str],
         size: float,
         order_type: str = "limit",
-        price: float | None = None,
+        price: Optional[float] = None,
         reduce_only: bool = False,
         margin_mode: str = "cross",
     ) -> Dict[str, Any]:
@@ -158,9 +169,9 @@ class OKXClient:
         self,
         inst_id: str,
         side: str,
-        pos_side: str | None,
-        tp_trigger_px: float | None,
-        sl_trigger_px: float | None,
+        pos_side: Optional[str],
+        tp_trigger_px: Optional[float],
+        sl_trigger_px: Optional[float],
         size: float,
         margin_mode: str = "cross",
     ) -> Dict[str, Any]:
@@ -214,7 +225,7 @@ class OKXClient:
         inst_id: str,
         leverage: int,
         margin_mode: str = "cross",
-        pos_side: str | None = None,
+        pos_side: Optional[str] = None,
     ) -> Dict[str, Any]:
         return self._safe(
             self.set_leverage,
