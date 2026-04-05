@@ -1,151 +1,153 @@
-from typing import Dict, Any, List
-from storage.state_store import StateStore
+from decimal import Decimal, ROUND_DOWN
+from typing import Dict, Any, Optional
+
+from clients.okx_client import OKXClient
+from config.settings import settings
 
 
-class DashboardStateService:
+class LivePreflightService:
     def __init__(self) -> None:
-        self.store = StateStore()
+        self.client = OKXClient()
+        self.instrument_cache: dict[str, Dict[str, Any]] = {}
 
-    def update(self, payload: Dict[str, Any]) -> None:
-        self.store.save(payload)
+    def load_instrument(self, inst_id: str) -> Optional[Dict[str, Any]]:
+        if inst_id in self.instrument_cache:
+            return self.instrument_cache[inst_id]
+        for row in self.client.safe_get_instruments():
+            if row.get("instId") == inst_id:
+                self.instrument_cache[inst_id] = row
+                return row
+        return None
 
-    def _to_float(self, value: Any, default: float = 0.0) -> float:
-        try:
-            return float(value)
-        except Exception:
-            return default
+    def quantize_down(self, value: float, step: str) -> float:
+        if not step or Decimal(step) == 0:
+            return value
+        d_value = Decimal(str(value))
+        d_step = Decimal(str(step))
+        quantized = (d_value / d_step).to_integral_value(rounding=ROUND_DOWN) * d_step
+        return float(quantized)
 
-    def _format_watchlist(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for row in rows or []:
-            entry = row.get("entry_decision", {}) or {}
-            leverage = row.get("leverage_decision", {}) or {}
-            tp_sl = row.get("tp_sl", {}) or {}
-            preflight = row.get("preflight", {}) or {}
-            formatted.append(
-                {
-                    "symbol": row.get("symbol", "-"),
-                    "side": entry.get("side", "-"),
-                    "confidence": self._to_float(entry.get("confidence", 0.0)),
-                    "entry": self._to_float(row.get("last_price", 0.0)),
-                    "tp": self._to_float(tp_sl.get("take_profit", 0.0)),
-                    "sl": self._to_float(tp_sl.get("stop_loss", 0.0)),
-                    "leverage": leverage.get("leverage", "-"),
-                    "margin_pct": self._to_float(leverage.get("margin_pct", 0.0)),
-                    "decision_reason": entry.get("decision_reason", ""),
-                    "raw_action": entry.get("original_action", entry.get("action", "")),
-                    "action": entry.get("action", ""),
-                    "block_reason": entry.get("block_reason", ""),
-                    "preflight_reason": preflight.get("reason", ""),
-                    "trend_bias": row.get("trend_bias", ""),
-                    "market_regime": row.get("market_regime", ""),
-                    "template_summary": row.get("template_summary", ""),
-                }
-            )
-        return formatted
+    def _extract_max_avail(self, payload: Dict[str, Any]) -> float | None:
+        for row in payload.get("data", []):
+            try:
+                return float(row.get("availBuy") or row.get("availSell") or 0.0)
+            except (TypeError, ValueError):
+                continue
+        return None
 
-    def _format_positions(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for row in rows or []:
-            formatted.append(
-                {
-                    "symbol": row.get("instId", row.get("symbol", "-")),
-                    "side": row.get("posSide", row.get("side", "-")),
-                    "size": self._to_float(row.get("pos", row.get("size", 0.0))),
-                    "entry_price": self._to_float(row.get("avgPx", row.get("entry_price", 0.0))),
-                    "current_price": self._to_float(row.get("markPx", row.get("current_price", 0.0))),
-                    "upl": self._to_float(row.get("upl", 0.0)),
-                    "upl_ratio": self._to_float(row.get("uplRatio", row.get("upl_ratio", 0.0))),
-                }
-            )
-        return formatted
+    def _max_avail_with_fallback(self, inst_id: str) -> Dict[str, Any]:
+        """
+        Some OKX account modes reject /account/max-avail-size with 51010.
+        In that case we degrade gracefully instead of spamming errors and blocking all scans.
+        """
+        payload = self.client.safe_get_max_avail_size(inst_id, settings.td_mode)
 
-    def _format_executed(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for row in rows or []:
-            preflight = row.get("preflight", {}) or {}
-            formatted.append(
-                {
-                    "symbol": row.get("symbol", "-"),
-                    "execution_mode": row.get("execution_mode", "-"),
-                    "final_size": self._to_float(row.get("final_size", row.get("desired_size", 0.0))),
-                    "entry_price": self._to_float(row.get("entry_price", 0.0)),
-                    "pos_side_used": row.get("pos_side_used", row.get("side", "net/none")),
-                    "preflight": {
-                        "reason": preflight.get("reason", "ok"),
-                    },
-                }
-            )
-        return formatted
+        # normal success
+        max_avail = self._extract_max_avail(payload)
+        if max_avail is not None:
+            return {
+                "supported": True,
+                "max_avail": max_avail,
+                "reason": "ok",
+            }
 
-    def _format_protective(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        formatted: List[Dict[str, Any]] = []
-        for row in rows or []:
-            tp_sl = row.get("tp_sl", {}) or row
-            formatted.append(
-                {
-                    "symbol": row.get("symbol", "-"),
-                    "mode": row.get("mode", row.get("protection_profile", "-")),
-                    "tp": self._to_float(tp_sl.get("take_profit", row.get("tp", 0.0))),
-                    "sl": self._to_float(tp_sl.get("stop_loss", row.get("sl", 0.0))),
-                    "size": self._to_float(row.get("size", row.get("final_size", 0.0))),
-                }
-            )
-        return formatted
+        # API wrapper returns {"code":"-1","data":[]} on exception,
+        # or a runtime payload if the server answered with non-zero code.
+        msg = str(payload.get("msg", "")).lower()
+        code = str(payload.get("code", ""))
 
-    def _format_roles(self, autonomy_audit: Dict[str, Any]) -> List[Dict[str, Any]]:
-        roles = autonomy_audit.get("roles", []) if isinstance(autonomy_audit, dict) else []
-        formatted: List[Dict[str, Any]] = []
-        for row in roles or []:
-            formatted.append(
-                {
-                    "role": row.get("role", "-"),
-                    "owner": row.get("owner", "-"),
-                    "status": row.get("status", "-"),
-                }
-            )
-        return formatted
+        # current account mode not compatible with this check
+        if code == "51010" or "current account mode" in msg:
+            return {
+                "supported": False,
+                "max_avail": None,
+                "reason": "max_avail_unsupported_for_account_mode",
+            }
 
-    def _normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        balance = payload.get("balance", {}) or {}
-        autonomy_audit = payload.get("autonomy_audit", {}) or {}
-        gpt_connection = payload.get("gpt_connection", {}) or {}
-        scan_meta = payload.get("scan_meta", {}) or {}
-
+        # generic unavailable/fallback
         return {
-            "balance": {
-                "equity": self._to_float(balance.get("equity", balance.get("total_equity", 0.0))),
-                "available": self._to_float(balance.get("available", balance.get("available_equity", 0.0))),
-                "used_margin": self._to_float(balance.get("used_margin", 0.0)),
-            },
-            "autonomy_audit": {
-                "autonomy_ratio": self._to_float(autonomy_audit.get("autonomy_ratio", 0.0)),
-                "roles": self._format_roles(autonomy_audit),
-            },
-            "watchlist": self._format_watchlist(payload.get("watchlist", [])),
-            "positions": self._format_positions(payload.get("positions", [])),
-            "executed_orders": self._format_executed(payload.get("executed_orders", [])),
-            "protective_orders": self._format_protective(payload.get("protective_orders", [])),
-            "managed_positions": payload.get("managed_positions", []),
-            "ai_recent_learning_plain": payload.get("ai_recent_learning_plain", "-"),
-            "system_notes": payload.get("system_notes", []),
-            "risk_guard": payload.get("risk_guard", {}),
-            "trade_summary": payload.get("trade_summary", {}),
-            "daily_gpt_review": payload.get("daily_gpt_review", {}),
-            "adaptive_policy": payload.get("adaptive_policy", {}),
-            "gpt_connection": gpt_connection,
-            "scan_meta": scan_meta,
+            "supported": False,
+            "max_avail": None,
+            "reason": "max_avail_unavailable",
         }
 
-    def read(self) -> Dict[str, Any]:
-        payload = self.store.load()
-        return self._normalize(payload if isinstance(payload, dict) else {})
+    def preflight(self, inst_id: str, desired_size: float, desired_price: float | None) -> Dict[str, Any]:
+        instrument = self.load_instrument(inst_id)
+        if not instrument:
+            return {"ok": False, "reason": "instrument_not_found"}
 
-    def get_state(self) -> Dict[str, Any]:
-        return self.read()
+        lot_sz = instrument.get("lotSz", "1")
+        min_sz = instrument.get("minSz", "1")
+        tick_sz = instrument.get("tickSz", "0.1")
 
-    def build_state(self) -> Dict[str, Any]:
-        return self.read()
+        size = self.quantize_down(desired_size, lot_sz)
+        if size < float(min_sz):
+            size = float(min_sz)
 
-    def snapshot(self) -> Dict[str, Any]:
-        return self.read()
+        price = self.quantize_down(desired_price, tick_sz) if desired_price is not None else None
+
+        max_avail = None
+        max_avail_reason = "not_checked"
+
+        if settings.require_max_avail_check:
+            max_row = self._max_avail_with_fallback(inst_id)
+            max_avail = max_row.get("max_avail")
+            max_avail_reason = max_row.get("reason", "unknown")
+
+        if max_avail is not None and max_avail > 0:
+            size = min(size, max_avail)
+
+        if size <= 0:
+            return {
+                "ok": False,
+                "reason": "size_after_preflight_invalid",
+                "max_avail_reason": max_avail_reason,
+            }
+
+        return {
+            "ok": True,
+            "inst_id": inst_id,
+            "lot_sz": lot_sz,
+            "min_sz": min_sz,
+            "tick_sz": tick_sz,
+            "final_size": size,
+            "final_price": price,
+            "max_avail": max_avail,
+            "max_avail_reason": max_avail_reason,
+        }
+
+    def check(self, candidate: Dict[str, Any], account_summary: Dict[str, Any], pos_mode: str) -> Dict[str, Any]:
+        symbol = candidate["symbol"]
+        market_snapshot = candidate.get("market_snapshot", {}) or {}
+        leverage_decision = candidate.get("leverage_decision", {}) or {}
+        sizing_decision = candidate.get("sizing_decision", {}) or {}
+
+        leverage = int(leverage_decision.get("leverage", settings.default_leverage_min))
+        margin_pct = float(leverage_decision.get("margin_pct", settings.default_margin_pct_min))
+        size_multiplier = float(sizing_decision.get("size_multiplier", 1.0) or 1.0)
+        last_price = float(market_snapshot.get("last_price", 0.0) or 0.0)
+        available_usdt = float(account_summary.get("available_equity", account_summary.get("equity", 0.0)) or 0.0)
+
+        desired_margin = max(available_usdt * margin_pct * size_multiplier, 1.0)
+        desired_notional = desired_margin * max(leverage, 1)
+        desired_size = round(max(desired_notional / max(last_price, 1e-9), settings.lifecycle_min_position_size), 8)
+
+        result = self.preflight(symbol, desired_size, last_price)
+        if result.get("ok"):
+            return {
+                "blocked": False,
+                "reason": result.get("max_avail_reason", "ok"),
+                "final_size": result.get("final_size"),
+                "final_price": result.get("final_price"),
+                "max_avail": result.get("max_avail"),
+                "max_avail_reason": result.get("max_avail_reason", "ok"),
+            }
+
+        return {
+            "blocked": True,
+            "reason": result.get("reason", "preflight_failed"),
+            "max_avail_reason": result.get("max_avail_reason", "unknown"),
+        }
+
+
+PreflightService = LivePreflightService
