@@ -163,21 +163,37 @@ class TradingRuntimeService:
             return {"entry_buffer": 0.06, "max_soft_entries": 1}
         return {"entry_buffer": 0.0, "max_soft_entries": 0}
 
-    def _select_symbols_for_cycle(self, symbols: List[str]) -> List[str]:
-        if not symbols:
+    def _normalize_symbol(self, item: Any) -> str:
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            return str(
+                item.get("symbol")
+                or item.get("instId")
+                or item.get("inst_id")
+                or item.get("code")
+                or ""
+            )
+        return str(item or "")
+
+    def _select_symbols_for_cycle(self, symbols: List[Any]) -> List[str]:
+        normalized = [self._normalize_symbol(x) for x in symbols]
+        normalized = [x for x in normalized if x]
+
+        if not normalized:
             return []
 
         batch_size = int(getattr(settings, "scan_batch_size_per_cycle", 8) or 8)
-        batch_size = max(3, min(batch_size, len(symbols)))
+        batch_size = max(3, min(batch_size, len(normalized)))
 
-        start = self._scan_offset % len(symbols)
+        start = self._scan_offset % len(normalized)
         end = start + batch_size
-        if end <= len(symbols):
-            selected = symbols[start:end]
+        if end <= len(normalized):
+            selected = normalized[start:end]
         else:
-            selected = symbols[start:] + symbols[: end - len(symbols)]
+            selected = normalized[start:] + normalized[: end - len(normalized)]
 
-        self._scan_offset = (start + batch_size) % len(symbols)
+        self._scan_offset = (start + batch_size) % len(normalized)
         return selected
 
     def _build_watch_row(
@@ -238,7 +254,9 @@ class TradingRuntimeService:
         margin_pct = float(leverage_decision.get("margin_pct", settings.default_margin_pct_min))
         size_multiplier = float(sizing_decision.get("size_multiplier", 1.0) or 1.0)
         last_price = float(market_snapshot.get("last_price", 0.0) or 0.0)
-        available_usdt = float(account_summary.get("available_equity", account_summary.get("equity", 0.0)) or 0.0)
+        available_usdt = float(
+            account_summary.get("available_equity", account_summary.get("available", account_summary.get("equity", 0.0))) or 0.0
+        )
 
         desired_margin = max(available_usdt * margin_pct * size_multiplier, 1.0)
         desired_notional = desired_margin * max(leverage, 1)
@@ -252,14 +270,16 @@ class TradingRuntimeService:
             if result.get("ok"):
                 return {
                     "blocked": False,
-                    "reason": "ok",
+                    "reason": result.get("max_avail_reason", "ok"),
                     "final_size": result.get("final_size"),
                     "final_price": result.get("final_price"),
                     "max_avail": result.get("max_avail"),
+                    "max_avail_reason": result.get("max_avail_reason", "ok"),
                 }
             return {
                 "blocked": True,
                 "reason": result.get("reason", "preflight_failed"),
+                "max_avail_reason": result.get("max_avail_reason", "unknown"),
             }
 
         return {"blocked": False, "reason": "preflight_unavailable"}
@@ -292,6 +312,7 @@ class TradingRuntimeService:
         watchlist: List[Dict[str, Any]] = []
         execution_candidates: List[Dict[str, Any]] = []
         soft_entry_used = 0
+        total_closed = int(trade_summary.get("closed_count", trade_summary.get("total_count", 0)) or 0)
 
         for scan in scans:
             symbol = scan["symbol"]
@@ -321,10 +342,18 @@ class TradingRuntimeService:
             sizing_decision = self.ai.decide_sizing(features)
 
             confidence = float(entry_decision.get("confidence", 0.0) or 0.0)
-            threshold = float(
+
+            base_threshold = float(
                 entry_decision.get("effective_threshold", settings.min_trade_confidence)
                 or settings.min_trade_confidence
             )
+
+            if total_closed < 20:
+                threshold = min(base_threshold, 0.35)
+            elif total_closed < 50:
+                threshold = min(base_threshold, 0.42)
+            else:
+                threshold = base_threshold
 
             soft_enter = (
                 entry_decision.get("action") != "enter"
@@ -333,8 +362,12 @@ class TradingRuntimeService:
                 and soft_entry_used < bootstrap["max_soft_entries"]
             )
 
-            candidate_action = "enter" if entry_decision.get("action") == "enter" or soft_enter else "wait"
+            hard_enter = entry_decision.get("action") == "enter" or confidence >= threshold
+            candidate_action = "enter" if hard_enter or soft_enter else "wait"
+
             decision_reason = "ai_enter"
+            if entry_decision.get("action") != "enter" and hard_enter:
+                decision_reason = "threshold_force_enter"
             if soft_enter:
                 decision_reason = "bootstrap_soft_entry"
                 soft_entry_used += 1
@@ -347,6 +380,7 @@ class TradingRuntimeService:
                     "action": candidate_action,
                     "original_action": entry_decision.get("action"),
                     "decision_reason": decision_reason,
+                    "effective_threshold_runtime": threshold,
                 },
                 "leverage_decision": leverage_decision,
                 "sizing_decision": sizing_decision,
@@ -462,7 +496,7 @@ class TradingRuntimeService:
                 "cycle": self._cycle_count,
                 "selected_symbols": selected_symbols,
                 "selected_count": len(selected_symbols),
-                "total_top_symbols": len(symbols),
+                "total_top_symbols": len(symbols) if isinstance(symbols, list) else 0,
                 "bootstrap_entry_buffer": bootstrap["entry_buffer"],
                 "bootstrap_max_soft_entries": bootstrap["max_soft_entries"],
             },
@@ -479,8 +513,9 @@ class TradingRuntimeService:
                 f"GPT_MODEL={settings.gpt_model}",
                 f"BOOTSTRAP_ENTRY_BUFFER={bootstrap['entry_buffer']}",
                 f"BOOTSTRAP_MAX_SOFT_ENTRIES={bootstrap['max_soft_entries']}",
+                f"total_closed={total_closed}",
                 f"consecutive_losses={trade_summary.get('consecutive_losses', 0)}/{settings.max_consecutive_losses_before_pause}",
-                f"SCAN_BATCH={len(selected_symbols)}/{len(symbols)}",
+                f"SCAN_BATCH={len(selected_symbols)}/{len(symbols) if isinstance(symbols, list) else 0}",
             ],
         }
 
@@ -489,7 +524,7 @@ class TradingRuntimeService:
             "step40 done. cycle=%s scanned=%s/%s watch=%s positions=%s executed=%s autonomy=%.2f risk_blocked=%s daily_review=%s gpt=%s",
             self._cycle_count,
             len(selected_symbols),
-            len(symbols),
+            len(symbols) if isinstance(symbols, list) else 0,
             len(watchlist),
             len(positions),
             len(executed_orders),
