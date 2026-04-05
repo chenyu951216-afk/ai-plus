@@ -129,7 +129,49 @@ def main() -> None:
     port = int(os.environ.get("PORT", "8080"))
     logger.info("Starting web server on 0.0.0.0:%s", port)
     app.run(host="0.0.0.0", port=port)
+from services.account_service import AccountService
+from services.trading_runtime_service import TradingRuntimeService
 
+account_service = AccountService()
+runtime_service = TradingRuntimeService()
+
+
+@app.route("/api/account")
+def api_account():
+    try:
+        data = account_service.get_account_summary()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/positions")
+def api_positions():
+    try:
+        data = runtime_service.get_positions_snapshot()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/orders")
+def api_orders():
+    try:
+        data = runtime_service.get_recent_orders()
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/ai/status")
+def api_ai_status():
+    try:
+        return jsonify({
+            "autonomy": 1.0,
+            "status": "running"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     main()
