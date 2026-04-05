@@ -21,6 +21,7 @@ class DashboardStateService:
             entry = row.get("entry_decision", {}) or {}
             leverage = row.get("leverage_decision", {}) or {}
             tp_sl = row.get("tp_sl", {}) or {}
+            preflight = row.get("preflight", {}) or {}
             formatted.append(
                 {
                     "symbol": row.get("symbol", "-"),
@@ -31,6 +32,11 @@ class DashboardStateService:
                     "sl": self._to_float(tp_sl.get("stop_loss", 0.0)),
                     "leverage": leverage.get("leverage", "-"),
                     "margin_pct": self._to_float(leverage.get("margin_pct", 0.0)),
+                    "decision_reason": entry.get("decision_reason", ""),
+                    "raw_action": entry.get("original_action", entry.get("action", "")),
+                    "action": entry.get("action", ""),
+                    "block_reason": entry.get("block_reason", ""),
+                    "preflight_reason": preflight.get("reason", ""),
                     "trend_bias": row.get("trend_bias", ""),
                     "market_regime": row.get("market_regime", ""),
                     "template_summary": row.get("template_summary", ""),
@@ -103,8 +109,10 @@ class DashboardStateService:
     def _normalize(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         balance = payload.get("balance", {}) or {}
         autonomy_audit = payload.get("autonomy_audit", {}) or {}
+        gpt_connection = payload.get("gpt_connection", {}) or {}
+        scan_meta = payload.get("scan_meta", {}) or {}
 
-        normalized = {
+        return {
             "balance": {
                 "equity": self._to_float(balance.get("equity", balance.get("total_equity", 0.0))),
                 "available": self._to_float(balance.get("available", balance.get("available_equity", 0.0))),
@@ -125,8 +133,9 @@ class DashboardStateService:
             "trade_summary": payload.get("trade_summary", {}),
             "daily_gpt_review": payload.get("daily_gpt_review", {}),
             "adaptive_policy": payload.get("adaptive_policy", {}),
+            "gpt_connection": gpt_connection,
+            "scan_meta": scan_meta,
         }
-        return normalized
 
     def read(self) -> Dict[str, Any]:
         payload = self.store.load()
