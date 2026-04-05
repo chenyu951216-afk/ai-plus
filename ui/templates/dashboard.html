@@ -5,22 +5,73 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OKX AI Futures Live Autonomy Dashboard</title>
   <style>
-    :root{--bg:#09111d;--card:#0f172a;--line:#24344f;--text:#e7eefc;--muted:#9fb1cc;--good:#2ecc71;--warn:#f1c40f;--bad:#ff6b6b;}
+    :root{
+      --bg:#09111d;--card:#0f172a;--line:#24344f;--text:#e7eefc;--muted:#9fb1cc;
+      --good:#2ecc71;--warn:#f1c40f;--bad:#ff6b6b;
+    }
     *{box-sizing:border-box}
-    body{margin:0;background:linear-gradient(180deg,#07101c,#0b1220 45%,#10192d);color:var(--text);font-family:Arial,Helvetica,sans-serif}
+    body{
+      margin:0;
+      background:linear-gradient(180deg,#07101c,#0b1220 45%,#10192d);
+      color:var(--text);
+      font-family:Arial,Helvetica,sans-serif
+    }
     .wrap{max-width:1500px;margin:0 auto;padding:20px}
-    .top{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border:1px solid var(--line);border-radius:22px;background:rgba(15,23,42,.88)}
+    .top{
+      display:flex;justify-content:space-between;align-items:flex-start;gap:20px;
+      padding:18px 20px;border:1px solid var(--line);border-radius:22px;background:rgba(15,23,42,.88)
+    }
     .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:16px}
-    .card{background:rgba(15,23,42,.92);border:1px solid var(--line);border-radius:22px;padding:18px}
-    .span-3{grid-column:span 3}.span-4{grid-column:span 4}.span-6{grid-column:span 6}.span-12{grid-column:span 12}
+    .card{
+      background:rgba(15,23,42,.92);
+      border:1px solid var(--line);
+      border-radius:22px;
+      padding:18px;
+      min-width:0;
+      overflow:hidden;
+    }
+    .span-3{grid-column:span 3}
+    .span-4{grid-column:span 4}
+    .span-6{grid-column:span 6}
+    .span-12{grid-column:span 12}
     .metric{font-size:30px;font-weight:700}
     .note{white-space:pre-wrap;line-height:1.7}
     .muted{color:var(--muted)}
-    .mini{font-size:12px;color:var(--muted)}
-    .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
-    table{width:100%;border-collapse:collapse;font-size:13px}
-    th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-    @media(max-width:1100px){.span-3,.span-4,.span-6,.span-12{grid-column:span 12}}
+    .mini{font-size:12px;color:var(--muted);margin-top:8px;word-break:break-word}
+    .good{color:var(--good)}
+    .warn{color:var(--warn)}
+    .bad{color:var(--bad)}
+
+    .table-wrap{
+      width:100%;
+      overflow-x:auto;
+      overflow-y:hidden;
+      border-radius:12px;
+    }
+
+    table{
+      width:100%;
+      min-width:980px;
+      border-collapse:collapse;
+      font-size:13px;
+      table-layout:fixed;
+    }
+
+    th,td{
+      padding:9px 8px;
+      border-bottom:1px solid var(--line);
+      text-align:left;
+      vertical-align:top;
+      word-break:break-word;
+      overflow-wrap:anywhere;
+    }
+
+    th{color:#dbe7ff}
+
+    @media(max-width:1100px){
+      .span-3,.span-4,.span-6,.span-12{grid-column:span 12}
+      table{min-width:900px}
+    }
   </style>
 </head>
 <body>
@@ -42,54 +93,64 @@
 
     <div class="card span-6">
       <h3>候選幣 / 掃描結果</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>幣種</th><th>方向</th><th>信心</th><th>進場</th><th>TP</th><th>SL</th><th>槓桿</th><th>保證金%</th><th>AI決策</th><th>被擋原因</th><th>preflight</th>
-          </tr>
-        </thead>
-        <tbody id="watchlist"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>幣種</th><th>方向</th><th>信心</th><th>進場</th><th>TP</th><th>SL</th><th>槓桿</th><th>保證金%</th><th>AI決策</th><th>被擋原因</th><th>preflight</th>
+            </tr>
+          </thead>
+          <tbody id="watchlist"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card span-6">
       <h3>目前持倉</h3>
-      <table>
-        <thead>
-          <tr><th>幣種</th><th>方向</th><th>張數</th><th>進場價</th><th>現價</th><th>浮盈虧</th><th>浮盈虧比</th></tr>
-        </thead>
-        <tbody id="positions"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>幣種</th><th>方向</th><th>張數</th><th>進場價</th><th>現價</th><th>浮盈虧</th><th>浮盈虧比</th></tr>
+          </thead>
+          <tbody id="positions"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card span-6">
       <h3>本輪送單 / preflight</h3>
-      <table>
-        <thead>
-          <tr><th>幣種</th><th>模式</th><th>最終數量</th><th>進場價</th><th>posSide</th><th>preflight</th></tr>
-        </thead>
-        <tbody id="executed"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>幣種</th><th>模式</th><th>最終數量</th><th>進場價</th><th>posSide</th><th>preflight</th></tr>
+          </thead>
+          <tbody id="executed"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card span-6">
       <h3>保護單</h3>
-      <table>
-        <thead>
-          <tr><th>幣種</th><th>模式</th><th>TP</th><th>SL</th><th>數量</th></tr>
-        </thead>
-        <tbody id="protective"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>幣種</th><th>模式</th><th>TP</th><th>SL</th><th>數量</th></tr>
+          </thead>
+          <tbody id="protective"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card span-4"><h3>AI 最近反思</h3><div class="note" id="reflection">-</div></div>
 
     <div class="card span-4">
       <h3>角色審計</h3>
-      <table>
-        <thead><tr><th>Role</th><th>Owner</th><th>Status</th></tr></thead>
-        <tbody id="roles"></tbody>
-      </table>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Role</th><th>Owner</th><th>Status</th></tr></thead>
+          <tbody id="roles"></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card span-4">
@@ -118,6 +179,16 @@ function table(id, rows, render, cols){
     return;
   }
   el.innerHTML=rows.map(render).join('');
+}
+function renderSymbols(list){
+  if(!Array.isArray(list) || list.length===0) return '-';
+  return list.map(x => {
+    if(typeof x === 'string') return x;
+    if(typeof x === 'object' && x !== null){
+      return x.symbol || x.instId || x.inst_id || JSON.stringify(x);
+    }
+    return String(x);
+  }).join(', ');
 }
 async function load(){
   try{
@@ -199,7 +270,7 @@ async function load(){
 
     const scanMeta = data.scan_meta || {};
     document.getElementById('scanMeta').textContent =
-      `cycle=${scanMeta.cycle ?? '-'} ｜ scanned=${scanMeta.selected_count ?? '-'} / ${scanMeta.total_top_symbols ?? '-'} ｜ symbols=${(scanMeta.selected_symbols || []).join(', ') || '-'}`;
+      `cycle=${scanMeta.cycle ?? '-'} ｜ scanned=${scanMeta.selected_count ?? '-'} / ${scanMeta.total_top_symbols ?? '-'} ｜ symbols=${renderSymbols(scanMeta.selected_symbols)}`;
 
     document.getElementById('status').textContent='已更新';
   }catch(e){
