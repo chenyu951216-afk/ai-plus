@@ -5,10 +5,12 @@ import logging
 from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 import requests
 
 from config.settings import settings
+
 
 class OKXClient:
     def __init__(self) -> None:
@@ -36,22 +38,34 @@ class OKXClient:
             headers["x-simulated-trading"] = "1"
         return headers
 
-    def _request(self, method: str, path: str, params: Optional[Dict[str, Any]] = None, private: bool = False) -> Dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        private: bool = False,
+    ) -> Dict[str, Any]:
         params = params or {}
+        method_upper = method.upper()
         url = f"{self.base_url}{path}"
 
-        if method.upper() == "GET":
+        if method_upper == "GET":
+            query_string = urlencode(params, doseq=True)
+            signed_path = f"{path}?{query_string}" if query_string else path
+
             response = self.session.get(
-                url, params=params,
-                headers=self._private_headers(method, path) if private else {},
-                timeout=20
+                url,
+                params=params,
+                headers=self._private_headers(method_upper, signed_path) if private else {},
+                timeout=20,
             )
         else:
-            body = json.dumps(params)
+            body = json.dumps(params, separators=(",", ":")) if params else ""
             response = self.session.post(
-                url, data=body,
-                headers=self._private_headers(method, path, body) if private else {},
-                timeout=20
+                url,
+                data=body,
+                headers=self._private_headers(method_upper, path, body) if private else {},
+                timeout=20,
             )
 
         response.raise_for_status()
@@ -64,30 +78,68 @@ class OKXClient:
         return self._request("GET", "/api/v5/account/balance", private=True)
 
     def get_positions(self) -> Dict[str, Any]:
-        return self._request("GET", "/api/v5/account/positions", params={"instType": settings.instrument_type}, private=True)
+        return self._request(
+            "GET",
+            "/api/v5/account/positions",
+            params={"instType": settings.instrument_type},
+            private=True,
+        )
 
     def get_account_config(self) -> Dict[str, Any]:
         return self._request("GET", "/api/v5/account/config", private=True)
 
     def get_max_avail_size(self, inst_id: str, td_mode: str) -> Dict[str, Any]:
-        return self._request("GET", "/api/v5/account/max-avail-size", params={"instId": inst_id, "tdMode": td_mode}, private=True)
+        return self._request(
+            "GET",
+            "/api/v5/account/max-avail-size",
+            params={"instId": inst_id, "tdMode": td_mode},
+            private=True,
+        )
 
     def get_tickers(self) -> List[Dict[str, Any]]:
-        return self._request("GET", "/api/v5/market/tickers", params={"instType": settings.instrument_type}).get("data", [])
+        return self._request(
+            "GET",
+            "/api/v5/market/tickers",
+            params={"instType": settings.instrument_type},
+        ).get("data", [])
 
     def get_instruments(self) -> List[Dict[str, Any]]:
-        return self._request("GET", "/api/v5/public/instruments", params={"instType": settings.instrument_type}).get("data", [])
+        return self._request(
+            "GET",
+            "/api/v5/public/instruments",
+            params={"instType": settings.instrument_type},
+        ).get("data", [])
 
     def get_candles(self, inst_id: str, bar: str, limit: int) -> List[List[Any]]:
-        return self._request("GET", "/api/v5/market/candles", params={"instId": inst_id, "bar": bar, "limit": str(limit)}).get("data", [])
+        return self._request(
+            "GET",
+            "/api/v5/market/candles",
+            params={"instId": inst_id, "bar": bar, "limit": str(limit)},
+        ).get("data", [])
 
-    def set_leverage(self, inst_id: str, leverage: int, margin_mode: str = "cross", pos_side: str | None = None) -> Dict[str, Any]:
+    def set_leverage(
+        self,
+        inst_id: str,
+        leverage: int,
+        margin_mode: str = "cross",
+        pos_side: str | None = None,
+    ) -> Dict[str, Any]:
         payload = {"instId": inst_id, "lever": str(leverage), "mgnMode": margin_mode}
         if pos_side:
             payload["posSide"] = pos_side
         return self._request("POST", "/api/v5/account/set-leverage", params=payload, private=True)
 
-    def place_order(self, inst_id: str, side: str, pos_side: str | None, size: float, order_type: str = "limit", price: float | None = None, reduce_only: bool = False, margin_mode: str = "cross") -> Dict[str, Any]:
+    def place_order(
+        self,
+        inst_id: str,
+        side: str,
+        pos_side: str | None,
+        size: float,
+        order_type: str = "limit",
+        price: float | None = None,
+        reduce_only: bool = False,
+        margin_mode: str = "cross",
+    ) -> Dict[str, Any]:
         payload = {
             "instId": inst_id,
             "tdMode": margin_mode,
@@ -102,8 +154,23 @@ class OKXClient:
             payload["px"] = str(price)
         return self._request("POST", "/api/v5/trade/order", params=payload, private=True)
 
-    def place_algo_tp_sl(self, inst_id: str, side: str, pos_side: str | None, tp_trigger_px: float | None, sl_trigger_px: float | None, size: float, margin_mode: str = "cross") -> Dict[str, Any]:
-        payload = {"instId": inst_id, "tdMode": margin_mode, "side": side, "ordType": "conditional", "sz": str(size)}
+    def place_algo_tp_sl(
+        self,
+        inst_id: str,
+        side: str,
+        pos_side: str | None,
+        tp_trigger_px: float | None,
+        sl_trigger_px: float | None,
+        size: float,
+        margin_mode: str = "cross",
+    ) -> Dict[str, Any]:
+        payload = {
+            "instId": inst_id,
+            "tdMode": margin_mode,
+            "side": side,
+            "ordType": "conditional",
+            "sz": str(size),
+        }
         if pos_side:
             payload["posSide"] = pos_side
         if tp_trigger_px is not None:
@@ -121,13 +188,45 @@ class OKXClient:
             self.logger.exception("okx error: %s", exc)
             return default
 
-    def safe_get_balance(self) -> Dict[str, Any]: return self._safe(self.get_balance, {"code": "-1", "data": []})
-    def safe_get_positions(self) -> Dict[str, Any]: return self._safe(self.get_positions, {"code": "-1", "data": []})
-    def safe_get_account_config(self) -> Dict[str, Any]: return self._safe(self.get_account_config, {"code": "-1", "data": []})
-    def safe_get_max_avail_size(self, inst_id: str, td_mode: str) -> Dict[str, Any]: return self._safe(self.get_max_avail_size, {"code": "-1", "data": []}, inst_id, td_mode)
-    def safe_get_tickers(self) -> List[Dict[str, Any]]: return self._safe(self.get_tickers, [])
-    def safe_get_instruments(self) -> List[Dict[str, Any]]: return self._safe(self.get_instruments, [])
-    def safe_get_candles(self, inst_id: str, bar: str, limit: int) -> List[List[Any]]: return self._safe(self.get_candles, [], inst_id, bar, limit)
-    def safe_set_leverage(self, inst_id: str, leverage: int, margin_mode: str = "cross", pos_side: str | None = None) -> Dict[str, Any]: return self._safe(self.set_leverage, {"code":"-1","data":[]}, inst_id, leverage, margin_mode, pos_side)
-    def safe_place_order(self, **kwargs: Any) -> Dict[str, Any]: return self._safe(self.place_order, {"code":"-1","data":[]}, **kwargs)
-    def safe_place_algo_tp_sl(self, **kwargs: Any) -> Dict[str, Any]: return self._safe(self.place_algo_tp_sl, {"code":"-1","data":[]}, **kwargs)
+    def safe_get_balance(self) -> Dict[str, Any]:
+        return self._safe(self.get_balance, {"code": "-1", "data": []})
+
+    def safe_get_positions(self) -> Dict[str, Any]:
+        return self._safe(self.get_positions, {"code": "-1", "data": []})
+
+    def safe_get_account_config(self) -> Dict[str, Any]:
+        return self._safe(self.get_account_config, {"code": "-1", "data": []})
+
+    def safe_get_max_avail_size(self, inst_id: str, td_mode: str) -> Dict[str, Any]:
+        return self._safe(self.get_max_avail_size, {"code": "-1", "data": []}, inst_id, td_mode)
+
+    def safe_get_tickers(self) -> List[Dict[str, Any]]:
+        return self._safe(self.get_tickers, [])
+
+    def safe_get_instruments(self) -> List[Dict[str, Any]]:
+        return self._safe(self.get_instruments, [])
+
+    def safe_get_candles(self, inst_id: str, bar: str, limit: int) -> List[List[Any]]:
+        return self._safe(self.get_candles, [], inst_id, bar, limit)
+
+    def safe_set_leverage(
+        self,
+        inst_id: str,
+        leverage: int,
+        margin_mode: str = "cross",
+        pos_side: str | None = None,
+    ) -> Dict[str, Any]:
+        return self._safe(
+            self.set_leverage,
+            {"code": "-1", "data": []},
+            inst_id,
+            leverage,
+            margin_mode,
+            pos_side,
+        )
+
+    def safe_place_order(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._safe(self.place_order, {"code": "-1", "data": []}, **kwargs)
+
+    def safe_place_algo_tp_sl(self, **kwargs: Any) -> Dict[str, Any]:
+        return self._safe(self.place_algo_tp_sl, {"code": "-1", "data": []}, **kwargs)
