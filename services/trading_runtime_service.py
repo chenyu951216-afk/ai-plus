@@ -31,7 +31,7 @@ from storage.trade_store import TradeStore
 class TradingRuntimeService:
     def __init__(self) -> None:
         self.logger = logging.getLogger(self.__class__.__name__)
-        self.pipeline = MarketPipelineService()
+        self.pipeline = MarketPipelineService(self.client, self.settings)
         self.account = AccountService()
         self.position_sync = PositionSyncService()
         self.preflight = PreflightService()
