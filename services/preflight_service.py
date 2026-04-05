@@ -15,7 +15,7 @@ class LivePreflightService:
             return self.instrument_cache[inst_id]
         for row in self.client.safe_get_instruments():
             if row.get("instId") == inst_id:
-                self.instrument_cache[inst_id] = row
+                self.instrument_cache[instId] = row
                 return row
         return None
 
@@ -117,7 +117,7 @@ class LivePreflightService:
         margin_pct = float(leverage_decision.get("margin_pct", settings.default_margin_pct_min))
         size_multiplier = float(sizing_decision.get("size_multiplier", 1.0) or 1.0)
         last_price = float(market_snapshot.get("last_price", 0.0) or 0.0)
-        available_usdt = float(account_summary.get("available_equity", account_summary.get("equity", 0.0)) or 0.0)
+        available_usdt = float(account_summary.get("available_equity", account_summary.get("available", account_summary.get("equity", 0.0))) or 0.0)
 
         desired_margin = max(available_usdt * margin_pct * size_multiplier, 1.0)
         desired_notional = desired_margin * max(leverage, 1)
