@@ -5,13 +5,21 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>OKX AI Futures Live Autonomy Dashboard</title>
   <style>
-    :root{--bg:#09111d;--card:#0f172a;--line:#24344f;--text:#e7eefc;--muted:#9fb1cc;--good:#2ecc71;}
-    *{box-sizing:border-box} body{margin:0;background:linear-gradient(180deg,#07101c,#0b1220 45%,#10192d);color:var(--text);font-family:Arial,Helvetica,sans-serif}
-    .wrap{max-width:1500px;margin:0 auto;padding:20px}.top{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border:1px solid var(--line);border-radius:22px;background:rgba(15,23,42,.88)}
-    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:16px}.card{background:rgba(15,23,42,.92);border:1px solid var(--line);border-radius:22px;padding:18px}
+    :root{--bg:#09111d;--card:#0f172a;--line:#24344f;--text:#e7eefc;--muted:#9fb1cc;--good:#2ecc71;--warn:#f1c40f;--bad:#ff6b6b;}
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#07101c,#0b1220 45%,#10192d);color:var(--text);font-family:Arial,Helvetica,sans-serif}
+    .wrap{max-width:1500px;margin:0 auto;padding:20px}
+    .top{display:flex;justify-content:space-between;align-items:center;padding:18px 20px;border:1px solid var(--line);border-radius:22px;background:rgba(15,23,42,.88)}
+    .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px;margin-top:16px}
+    .card{background:rgba(15,23,42,.92);border:1px solid var(--line);border-radius:22px;padding:18px}
     .span-3{grid-column:span 3}.span-4{grid-column:span 4}.span-6{grid-column:span 6}.span-12{grid-column:span 12}
-    .metric{font-size:30px;font-weight:700}.note{white-space:pre-wrap;line-height:1.7}.muted{color:var(--muted)}
-    table{width:100%;border-collapse:collapse;font-size:13px} th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left}
+    .metric{font-size:30px;font-weight:700}
+    .note{white-space:pre-wrap;line-height:1.7}
+    .muted{color:var(--muted)}
+    .mini{font-size:12px;color:var(--muted)}
+    .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
     @media(max-width:1100px){.span-3,.span-4,.span-6,.span-12{grid-column:span 12}}
   </style>
 </head>
@@ -21,6 +29,7 @@
     <div>
       <h1>OKX AI Futures Live Autonomy Dashboard</h1>
       <div class="muted">第35步｜真實下單 + AI 自主化總控整合版</div>
+      <div class="mini" id="scanMeta">掃描資訊載入中...</div>
     </div>
     <div id="status">更新中...</div>
   </div>
@@ -31,49 +40,174 @@
     <div class="card span-3"><h3>已用保證金</h3><div class="metric" id="used_margin">-</div></div>
     <div class="card span-3"><h3>自主化比例</h3><div class="metric" id="autonomy_ratio">-</div></div>
 
-    <div class="card span-6"><h3>候選幣</h3><table><thead><tr><th>幣種</th><th>方向</th><th>信心</th><th>進場</th><th>TP</th><th>SL</th><th>槓桿</th><th>保證金%</th></tr></thead><tbody id="watchlist"></tbody></table></div>
-    <div class="card span-6"><h3>目前持倉</h3><table><thead><tr><th>幣種</th><th>方向</th><th>張數</th><th>進場價</th><th>現價</th><th>浮盈虧</th><th>浮盈虧比</th></tr></thead><tbody id="positions"></tbody></table></div>
+    <div class="card span-6">
+      <h3>候選幣 / 掃描結果</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>幣種</th><th>方向</th><th>信心</th><th>進場</th><th>TP</th><th>SL</th><th>槓桿</th><th>保證金%</th><th>AI決策</th><th>被擋原因</th><th>preflight</th>
+          </tr>
+        </thead>
+        <tbody id="watchlist"></tbody>
+      </table>
+    </div>
 
-    <div class="card span-6"><h3>本輪送單 / preflight</h3><table><thead><tr><th>幣種</th><th>模式</th><th>最終數量</th><th>進場價</th><th>posSide</th><th>preflight</th></tr></thead><tbody id="executed"></tbody></table></div>
-    <div class="card span-6"><h3>保護單</h3><table><thead><tr><th>幣種</th><th>模式</th><th>TP</th><th>SL</th><th>數量</th></tr></thead><tbody id="protective"></tbody></table></div>
+    <div class="card span-6">
+      <h3>目前持倉</h3>
+      <table>
+        <thead>
+          <tr><th>幣種</th><th>方向</th><th>張數</th><th>進場價</th><th>現價</th><th>浮盈虧</th><th>浮盈虧比</th></tr>
+        </thead>
+        <tbody id="positions"></tbody>
+      </table>
+    </div>
+
+    <div class="card span-6">
+      <h3>本輪送單 / preflight</h3>
+      <table>
+        <thead>
+          <tr><th>幣種</th><th>模式</th><th>最終數量</th><th>進場價</th><th>posSide</th><th>preflight</th></tr>
+        </thead>
+        <tbody id="executed"></tbody>
+      </table>
+    </div>
+
+    <div class="card span-6">
+      <h3>保護單</h3>
+      <table>
+        <thead>
+          <tr><th>幣種</th><th>模式</th><th>TP</th><th>SL</th><th>數量</th></tr>
+        </thead>
+        <tbody id="protective"></tbody>
+      </table>
+    </div>
 
     <div class="card span-4"><h3>AI 最近反思</h3><div class="note" id="reflection">-</div></div>
-    <div class="card span-4"><h3>角色審計</h3><table><thead><tr><th>Role</th><th>Owner</th><th>Status</th></tr></thead><tbody id="roles"></tbody></table></div>
-    <div class="card span-4"><h3>持倉管理</h3><div class="note" id="managed"></div></div>
+
+    <div class="card span-4">
+      <h3>角色審計</h3>
+      <table>
+        <thead><tr><th>Role</th><th>Owner</th><th>Status</th></tr></thead>
+        <tbody id="roles"></tbody>
+      </table>
+    </div>
+
+    <div class="card span-4">
+      <h3>持倉管理 / GPT</h3>
+      <div class="note" id="managed"></div>
+      <hr style="border-color:#24344f;">
+      <div class="note" id="gptBox"></div>
+    </div>
 
     <div class="card span-12"><h3>系統說明</h3><div class="note" id="notes"></div></div>
   </div>
 </div>
+
 <script>
-function fmt(v,d=4){const n=Number(v); return Number.isNaN(n)?(v??'-'):n.toFixed(d)}
+function fmt(v,d=4){
+  const n=Number(v);
+  return Number.isNaN(n) ? (v ?? '-') : n.toFixed(d);
+}
+function esc(v){
+  return (v ?? '-').toString();
+}
 function table(id, rows, render, cols){
   const el=document.getElementById(id);
-  if(!rows || rows.length===0){el.innerHTML=`<tr><td colspan="${cols}" class="muted">目前沒有資料</td></tr>`;return;}
+  if(!rows || rows.length===0){
+    el.innerHTML=`<tr><td colspan="${cols}" class="muted">目前沒有資料</td></tr>`;
+    return;
+  }
   el.innerHTML=rows.map(render).join('');
 }
 async function load(){
   try{
-    const r=await fetch('/api/dashboard'); const data=await r.json();
+    const r=await fetch('/api/dashboard');
+    const data=await r.json();
+
     document.getElementById('equity').textContent=fmt(data.balance?.equity ?? 0,4);
     document.getElementById('available').textContent=fmt(data.balance?.available ?? 0,4);
     document.getElementById('used_margin').textContent=fmt(data.balance?.used_margin ?? 0,4);
     document.getElementById('autonomy_ratio').textContent=((Number(data.autonomy_audit?.autonomy_ratio || 0)*100).toFixed(1))+'%';
 
-    table('watchlist', data.watchlist, x=>`<tr><td>${x.symbol||'-'}</td><td>${x.side||'-'}</td><td>${fmt(x.confidence,4)}</td><td>${fmt(x.entry,6)}</td><td>${fmt(x.tp,6)}</td><td>${fmt(x.sl,6)}</td><td>${x.leverage??'-'}</td><td>${fmt(x.margin_pct,4)}</td></tr>`, 8);
-    table('positions', data.positions, x=>`<tr><td>${x.symbol||'-'}</td><td>${x.side||'-'}</td><td>${fmt(x.size,4)}</td><td>${fmt(x.entry_price,6)}</td><td>${fmt(x.current_price,6)}</td><td>${fmt(x.upl,4)}</td><td>${fmt(x.upl_ratio,4)}</td></tr>`, 7);
-    table('executed', data.executed_orders, x=>`<tr><td>${x.symbol||'-'}</td><td>${x.execution_mode||'-'}</td><td>${fmt(x.final_size ?? 0,4)}</td><td>${fmt(x.entry_price,6)}</td><td>${x.pos_side_used ?? 'net/none'}</td><td>${x.preflight?.reason || 'ok'}</td></tr>`, 6);
-    table('protective', data.protective_orders, x=>`<tr><td>${x.symbol||'-'}</td><td>${x.mode||'-'}</td><td>${fmt(x.tp,6)}</td><td>${fmt(x.sl,6)}</td><td>${fmt(x.size,4)}</td></tr>`, 5);
-    table('roles', data.autonomy_audit?.roles || [], x=>`<tr><td>${x.role}</td><td>${x.owner}</td><td>${x.status}</td></tr>`, 3);
+    table('watchlist', data.watchlist, x=>`
+      <tr>
+        <td>${esc(x.symbol)}</td>
+        <td>${esc(x.side)}</td>
+        <td>${fmt(x.confidence,4)}</td>
+        <td>${fmt(x.entry,6)}</td>
+        <td>${fmt(x.tp,6)}</td>
+        <td>${fmt(x.sl,6)}</td>
+        <td>${esc(x.leverage)}</td>
+        <td>${fmt(x.margin_pct,4)}</td>
+        <td>${esc(x.action)} / ${esc(x.decision_reason)}</td>
+        <td>${esc(x.block_reason)}</td>
+        <td>${esc(x.preflight_reason)}</td>
+      </tr>
+    `, 11);
 
-    document.getElementById('reflection').textContent=data.ai_recent_learning_plain || '-';
-    document.getElementById('managed').textContent=(data.managed_positions || []).map(x=>`${x.symbol}: protection=${x.protection?.action || '-'} sizing=${x.sizing?.action || '-'} risk=${x.risk_guard?.reason || '-'} exit=${x.exit ? 'yes' : 'no'}`).join('\n');
+    table('positions', data.positions, x=>`
+      <tr>
+        <td>${esc(x.symbol)}</td>
+        <td>${esc(x.side)}</td>
+        <td>${fmt(x.size,4)}</td>
+        <td>${fmt(x.entry_price,6)}</td>
+        <td>${fmt(x.current_price,6)}</td>
+        <td>${fmt(x.upl,4)}</td>
+        <td>${fmt(x.upl_ratio,4)}</td>
+      </tr>
+    `, 7);
+
+    table('executed', data.executed_orders, x=>`
+      <tr>
+        <td>${esc(x.symbol)}</td>
+        <td>${esc(x.execution_mode)}</td>
+        <td>${fmt(x.final_size ?? 0,4)}</td>
+        <td>${fmt(x.entry_price,6)}</td>
+        <td>${esc(x.pos_side_used ?? 'net/none')}</td>
+        <td>${esc(x.preflight?.reason || 'ok')}</td>
+      </tr>
+    `, 6);
+
+    table('protective', data.protective_orders, x=>`
+      <tr>
+        <td>${esc(x.symbol)}</td>
+        <td>${esc(x.mode)}</td>
+        <td>${fmt(x.tp,6)}</td>
+        <td>${fmt(x.sl,6)}</td>
+        <td>${fmt(x.size,4)}</td>
+      </tr>
+    `, 5);
+
+    table('roles', data.autonomy_audit?.roles || [], x=>`
+      <tr><td>${esc(x.role)}</td><td>${esc(x.owner)}</td><td>${esc(x.status)}</td></tr>
+    `, 3);
+
+    document.getElementById('reflection').textContent = data.ai_recent_learning_plain || '-';
+
+    document.getElementById('managed').textContent = (data.managed_positions || [])
+      .map(x => `${x.symbol}: protection=${x.protection?.action || '-'} sizing=${x.sizing?.action || '-'} risk=${x.risk_guard?.reason || '-'} exit=${x.exit ? 'yes' : 'no'}`)
+      .join('\n') || '目前沒有資料';
+
+    const gpt = data.gpt_connection || {};
+    document.getElementById('gptBox').textContent =
+      `GPT 可用: ${gpt.available ? '是' : '否'}\n` +
+      `模型: ${gpt.model || '-'}\n` +
+      `每日檢討: ${gpt.daily_review_enabled ? '開啟' : '關閉'}\n` +
+      `目前狀態: ${gpt.daily_review_reason || '-'}`;
+
     document.getElementById('notes').textContent=(data.system_notes || []).join('\n');
+
+    const scanMeta = data.scan_meta || {};
+    document.getElementById('scanMeta').textContent =
+      `cycle=${scanMeta.cycle ?? '-'} ｜ scanned=${scanMeta.selected_count ?? '-'} / ${scanMeta.total_top_symbols ?? '-'} ｜ symbols=${(scanMeta.selected_symbols || []).join(', ') || '-'}`;
+
     document.getElementById('status').textContent='已更新';
   }catch(e){
     document.getElementById('status').textContent='載入失敗';
   }
 }
-load(); setInterval(load, 5000);
+load();
+setInterval(load, 5000);
 </script>
 </body>
 </html>
