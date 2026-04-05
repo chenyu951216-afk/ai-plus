@@ -4,20 +4,47 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 def _get_bool(key: str, default: bool) -> bool:
     value = os.getenv(key, str(default)).strip().lower()
     return value in {"1", "true", "yes", "y", "on"}
+
+
+def _get_first_env(*keys: str) -> str:
+    for key in keys:
+        value = os.getenv(key)
+        if value is not None and value.strip():
+            return value.strip()
+    return ""
+
 
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "okx-ai-futures-live-autonomy").strip()
     app_env: str = os.getenv("APP_ENV", "production")
 
-    okx_api_key: str = os.getenv("OKX_API_KEY", "").strip()
-    okx_api_secret: str = os.getenv("OKX_API_SECRET", "").strip()
-    okx_api_passphrase: str = os.getenv("OKX_API_PASSPHRASE", "").strip()
+    okx_api_key: str = _get_first_env(
+        "OKX_API_KEY",
+        "OKX_KEY",
+        "OKX_ACCESS_KEY",
+    )
+    okx_api_secret: str = _get_first_env(
+        "OKX_API_SECRET",
+        "OKX_SECRET",
+        "OKX_SECRET_KEY",
+        "OKX_ACCESS_SECRET",
+    )
+    okx_api_passphrase: str = _get_first_env(
+        "OKX_API_PASSPHRASE",
+        "OKX_PASSPHRASE",
+        "OKX_ACCESS_PASSPHRASE",
+    )
     okx_base_url: str = os.getenv("OKX_BASE_URL", "https://www.okx.com").strip()
-    okx_is_demo: bool = _get_bool("OKX_IS_DEMO", False)
+    okx_is_demo: bool = (
+        _get_bool("OKX_IS_DEMO", False)
+        or _get_bool("OKX_DEMO", False)
+        or _get_bool("USE_OKX_DEMO", False)
+    )
 
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "").strip()
     enable_gpt_reflection: bool = _get_bool("ENABLE_GPT_REFLECTION", True)
@@ -110,5 +137,6 @@ class Settings:
 
     ui_host: str = os.getenv("UI_HOST", "0.0.0.0").strip()
     ui_port: int = int(os.getenv("UI_PORT", "8090"))
+
 
 settings = Settings()
