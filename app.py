@@ -1,8 +1,9 @@
 import logging
 import os
 import threading
+from pathlib import Path
 
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 
 from memory.backup_memory import ProjectMemoryBackup
 from services.runtime_loop_service import RuntimeLoopService
@@ -13,6 +14,11 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("app")
+
+BASE_DIR = Path(__file__).resolve().parent
+UI_DIR = BASE_DIR / "ui"
+TEMPLATES_DIR = UI_DIR / "templates"
+
 app = Flask(__name__)
 
 
@@ -60,11 +66,20 @@ def _run_runtime_loop() -> None:
 
 @app.route("/")
 def home():
+    index_html = UI_DIR / "index.html"
+    dashboard_html = TEMPLATES_DIR / "dashboard.html"
+
+    if index_html.exists():
+        return send_from_directory(UI_DIR, "index.html")
+    if dashboard_html.exists():
+        return send_from_directory(TEMPLATES_DIR, "dashboard.html")
+
     return jsonify(
         {
             "status": "ok",
             "service": "okx-ai-trading-bot",
             "message": "runtime loop is running in background",
+            "ui": "not found",
         }
     )
 
@@ -72,6 +87,33 @@ def home():
 @app.route("/health")
 def health():
     return jsonify({"status": "healthy"})
+
+
+@app.route("/ui")
+def serve_ui():
+    index_html = UI_DIR / "index.html"
+    dashboard_html = TEMPLATES_DIR / "dashboard.html"
+
+    if index_html.exists():
+        return send_from_directory(UI_DIR, "index.html")
+    if dashboard_html.exists():
+        return send_from_directory(TEMPLATES_DIR, "dashboard.html")
+
+    return jsonify({"status": "error", "message": "UI file not found"}), 404
+
+
+@app.route("/ui/<path:filename>")
+def serve_ui_assets(filename: str):
+    direct_file = UI_DIR / filename
+    template_file = TEMPLATES_DIR / filename
+
+    if direct_file.exists() and direct_file.is_file():
+        return send_from_directory(UI_DIR, filename)
+
+    if template_file.exists() and template_file.is_file():
+        return send_from_directory(TEMPLATES_DIR, filename)
+
+    return jsonify({"status": "error", "message": f"Asset not found: {filename}"}), 404
 
 
 def main() -> None:
