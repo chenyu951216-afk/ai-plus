@@ -78,6 +78,24 @@ class OKXClient:
             raise RuntimeError(payload)
         return payload
 
+    def _should_suppress_error_log(self, fn_name: str, exc: Exception) -> bool:
+        text = str(exc)
+        # OKX 51010 on max-avail-size under current account mode is expected in your setup.
+        if fn_name == "get_max_avail_size" and "51010" in text and "current account mode" in text.lower():
+            return True
+        return False
+
+    def _safe(self, fn, default, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            fn_name = getattr(fn, "__name__", "")
+            if self._should_suppress_error_log(fn_name, exc):
+                self.logger.info("okx soft-fallback on %s: %s", fn_name, exc)
+            else:
+                self.logger.exception("okx error: %s", exc)
+            return default
+
     def get_balance(self) -> Dict[str, Any]:
         return self._request("GET", "/api/v5/account/balance", private=True)
 
@@ -192,13 +210,6 @@ class OKXClient:
             payload["slOrdPx"] = "-1"
         return self._request("POST", "/api/v5/trade/order-algo", params=payload, private=True)
 
-    def _safe(self, fn, default, *args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except Exception as exc:
-            self.logger.exception("okx error: %s", exc)
-            return default
-
     def safe_get_balance(self) -> Dict[str, Any]:
         return self._safe(self.get_balance, {"code": "-1", "data": []})
 
@@ -209,7 +220,12 @@ class OKXClient:
         return self._safe(self.get_account_config, {"code": "-1", "data": []})
 
     def safe_get_max_avail_size(self, inst_id: str, td_mode: str) -> Dict[str, Any]:
-        return self._safe(self.get_max_avail_size, {"code": "-1", "data": []}, inst_id, td_mode)
+        return self._safe(
+            self.get_max_avail_size,
+            {"code": "51010", "msg": "You can't complete this request under your current account mode.", "data": []},
+            inst_id,
+            td_mode,
+        )
 
     def safe_get_tickers(self) -> List[Dict[str, Any]]:
         return self._safe(self.get_tickers, [])
