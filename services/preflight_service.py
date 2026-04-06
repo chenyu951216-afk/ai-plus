@@ -11,11 +11,13 @@ class LivePreflightService:
         self.instrument_cache: dict[str, Dict[str, Any]] = {}
 
     def load_instrument(self, inst_id: str) -> Optional[Dict[str, Any]]:
+        if not inst_id:
+            return None
         if inst_id in self.instrument_cache:
             return self.instrument_cache[inst_id]
         for row in self.client.safe_get_instruments():
             if row.get("instId") == inst_id:
-                self.instrument_cache[instId] = row
+                self.instrument_cache[inst_id] = row
                 return row
         return None
 
