@@ -34,7 +34,9 @@ class ProtectiveOrderService:
         algo_side = self._algo_side(side)
         pos_side = self._pos_side(side, account_pos_mode)
 
-        if size <= 0:
+        if settings.skip_protective_if_entry_failed and not execution_record.get("order_success", False):
+            result = {"code": "0", "msg": "protective_skipped_entry_failed", "data": []}
+        elif size <= 0:
             result = {"code": "-1", "msg": "invalid_protective_order_size", "data": []}
         else:
             result = self.client.safe_place_algo_tp_sl(
