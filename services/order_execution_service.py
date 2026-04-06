@@ -24,6 +24,19 @@ class OrderExecutionService:
         desired_notional = desired_margin * max(leverage, 1)
         return round(max(desired_notional / max(last_price, 1e-9), settings.lifecycle_min_position_size), 8)
 
+    def _is_okx_success(self, payload: Dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("code", "-1")) not in {"0", "", "None"}:
+            return False
+        rows = payload.get("data", []) or []
+        if not rows:
+            return True
+        for row in rows:
+            if str(row.get("sCode", "0")) not in {"0", "", "None"}:
+                return False
+        return True
+
     def execute(self, candidate: Dict[str, Any], pos_mode: str, account_summary: Dict[str, Any]) -> Dict[str, Any]:
         preflight = candidate.get("preflight", {})
         if preflight.get("blocked"):
@@ -31,6 +44,7 @@ class OrderExecutionService:
                 "symbol": candidate["symbol"],
                 "side": candidate["side"],
                 "execution_mode": "blocked",
+                "order_success": False,
                 "reason": preflight.get("reason", "preflight_blocked"),
                 "preflight": preflight,
             }
@@ -57,6 +71,19 @@ class OrderExecutionService:
 
         pos_side = self._position_pos_side(pos_mode, candidate["side"])
         order_side = "buy" if candidate["side"] == "long" else "sell"
+
+        leverage_result = (
+            self.client.safe_set_leverage(
+                inst_id=candidate["symbol"],
+                leverage=leverage,
+                margin_mode=settings.td_mode,
+                pos_side=pos_side,
+            )
+            if settings.enable_live_execution and settings.set_leverage_before_entry
+            else {"code": "0", "data": [{"msg": "leverage_setup_skipped"}]}
+        )
+        leverage_success = self._is_okx_success(leverage_result)
+
         result = (
             self.client.safe_place_order(
                 inst_id=candidate["symbol"],
@@ -71,12 +98,22 @@ class OrderExecutionService:
             if settings.enable_live_execution
             else {"code": "0", "data": [{"ordId": f"paper-{candidate['symbol']}"}]}
         )
-        tp_sl = self.tp_sl.suggest(candidate.get("features", {}), candidate["side"], float(candidate.get("entry_decision", {}).get("confidence", 0.0) or 0.0))
+        order_success = self._is_okx_success(result)
+
+        tp_sl = self.tp_sl.suggest(
+            candidate.get("features", {}),
+            candidate["side"],
+            float(candidate.get("entry_decision", {}).get("confidence", 0.0) or 0.0),
+        )
+        execution_mode = "paper" if not settings.enable_live_execution else ("live" if order_success else "failed")
         execution = {
             "symbol": candidate["symbol"],
             "side": candidate["side"],
-            "execution_mode": "live" if settings.enable_live_execution else "paper",
+            "execution_mode": execution_mode,
+            "order_success": order_success,
             "order_result": result,
+            "leverage_result": leverage_result,
+            "leverage_success": leverage_success,
             "desired_size": desired_size,
             "final_size": final_size,
             "entry_price": entry_price,
@@ -95,15 +132,17 @@ class OrderExecutionService:
             "protection_state": policy.get("protection_profile", "balanced"),
             "tp_sl": tp_sl,
             "preflight": preflight,
+            "reason": "order_placed" if order_success else "order_rejected",
         }
-        self.lifecycle.update(candidate["symbol"], candidate["side"], {
-            "scale_in_count": 0,
-            "partial_exit_count": 0,
-            "tp1_done": False,
-            "tp2_done": False,
-            "last_action": "entry",
-            "last_reason": "new_position",
-        })
+        if order_success:
+            self.lifecycle.update(candidate["symbol"], candidate["side"], {
+                "scale_in_count": 0,
+                "partial_exit_count": 0,
+                "tp1_done": False,
+                "tp2_done": False,
+                "last_action": "entry",
+                "last_reason": "new_position",
+            })
         self.orders.append(execution)
         return execution
 
@@ -131,14 +170,16 @@ class OrderExecutionService:
             if settings.enable_live_execution
             else {"code": "0", "data": [{"ordId": f"paper-manage-{symbol}-{action}"}]}
         )
+        order_success = self._is_okx_success(result)
         state = self.lifecycle.get(symbol, side)
         updates = {"last_action": action, "last_reason": action}
-        if action == "scale_in":
+        if action == "scale_in" and order_success:
             updates["scale_in_count"] = int(state.get("scale_in_count", 0) or 0) + 1
         record = {
             "symbol": symbol,
             "side": side,
             "execution_mode": "live" if settings.enable_live_execution else "paper",
+            "order_success": order_success,
             "management_action": action,
             "managed_size": target_size,
             "fraction": fraction,
@@ -148,6 +189,7 @@ class OrderExecutionService:
             "pre_breakout_score": float(features.get("pre_breakout_score", 0.0) or 0.0),
             "review_area": "position_management",
         }
-        self.lifecycle.update(symbol, side, updates)
+        if order_success:
+            self.lifecycle.update(symbol, side, updates)
         self.orders.append(record)
         return record
