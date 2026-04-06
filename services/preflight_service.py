@@ -10,6 +10,14 @@ class LivePreflightService:
         self.client = OKXClient()
         self.instrument_cache: dict[str, Dict[str, Any]] = {}
 
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            if value in (None, "", "None"):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
     def load_instrument(self, inst_id: str) -> Optional[Dict[str, Any]]:
         if not inst_id:
             return None
@@ -64,6 +72,30 @@ class LivePreflightService:
             "reason": "max_avail_unavailable",
         }
 
+    def _convert_base_size_to_order_size(self, instrument: Dict[str, Any], desired_size: float) -> float:
+        """
+        desired_size 在你現在的策略流程裡，是用 notional / last_price 算出的「幣數」。
+        但 OKX SWAP/FUTURES 的 sz 通常是「合約張數」，不是幣數。
+        所以這裡要先把幣數換成 OKX 可下單的 order size，再做 lot/min 量化。
+        """
+        inst_type = str(instrument.get("instType") or settings.instrument_type or "").upper()
+        if inst_type not in {"SWAP", "FUTURES"}:
+            return desired_size
+
+        ct_val = self._safe_float(instrument.get("ctVal"), 0.0)
+        if ct_val <= 0:
+            return desired_size
+
+        ct_mult = self._safe_float(instrument.get("ctMult"), 1.0)
+        if ct_mult <= 0:
+            ct_mult = 1.0
+
+        contract_unit = ct_val * ct_mult
+        if contract_unit <= 0:
+            return desired_size
+
+        return desired_size / contract_unit
+
     def preflight(self, inst_id: str, desired_size: float, desired_price: float | None) -> Dict[str, Any]:
         instrument = self.load_instrument(inst_id)
         if not instrument:
@@ -73,9 +105,11 @@ class LivePreflightService:
         min_sz = instrument.get("minSz", "1")
         tick_sz = instrument.get("tickSz", "0.1")
 
-        size = self.quantize_down(desired_size, lot_sz)
-        if size < float(min_sz):
-            size = float(min_sz)
+        raw_order_size = self._convert_base_size_to_order_size(instrument, desired_size)
+        size = self.quantize_down(raw_order_size, lot_sz)
+        min_sz_float = self._safe_float(min_sz, 1.0)
+        if size < min_sz_float:
+            size = min_sz_float
 
         price = self.quantize_down(desired_price, tick_sz) if desired_price is not None else None
 
@@ -89,6 +123,7 @@ class LivePreflightService:
 
         if max_avail is not None and max_avail > 0:
             size = min(size, max_avail)
+            size = self.quantize_down(size, lot_sz)
 
         if size <= 0:
             return {
@@ -103,6 +138,9 @@ class LivePreflightService:
             "lot_sz": lot_sz,
             "min_sz": min_sz,
             "tick_sz": tick_sz,
+            "ct_val": instrument.get("ctVal"),
+            "ct_mult": instrument.get("ctMult"),
+            "raw_order_size": raw_order_size,
             "final_size": size,
             "final_price": price,
             "max_avail": max_avail,
@@ -132,6 +170,9 @@ class LivePreflightService:
                 "reason": result.get("max_avail_reason", "ok"),
                 "final_size": result.get("final_size"),
                 "final_price": result.get("final_price"),
+                "raw_order_size": result.get("raw_order_size"),
+                "ct_val": result.get("ct_val"),
+                "ct_mult": result.get("ct_mult"),
                 "max_avail": result.get("max_avail"),
                 "max_avail_reason": result.get("max_avail_reason", "ok"),
             }
