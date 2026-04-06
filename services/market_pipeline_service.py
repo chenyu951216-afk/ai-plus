@@ -1,92 +1,164 @@
-import time
 import logging
+import time
+from typing import Any, Dict, List, Optional
+
+import pandas as pd
+
+from clients.okx_client import OKXClient
+from config.settings import settings as global_settings
 
 logger = logging.getLogger("MarketPipelineService")
 
 
 class MarketPipelineService:
-    def __init__(self, client, settings):
-        self.client = client
-        self.settings = settings
+    """
+    Preserves the original project shape:
+    - can be initialized with or without client/settings
+    - get_top_symbols()
+    - scan(symbols) -> [{"symbol","df","market_snapshot"}]
 
-    def scan(self, symbols):
-        results = []
+    This fixes the crash caused by requiring client/settings positional args,
+    while avoiding the overly-simplified version that removed needed behavior.
+    """
 
-        timeframe = self.settings.primary_timeframe
-        limit = self.settings.candle_limit
+    def __init__(self, client: Optional[OKXClient] = None, settings_obj: Optional[Any] = None):
+        self.client = client or OKXClient()
+        self.settings = settings_obj or global_settings
 
-        for symbol in symbols:
+    def _normalize_symbol(self, item: Any) -> str:
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            return str(
+                item.get("instId")
+                or item.get("symbol")
+                or item.get("inst_id")
+                or item.get("code")
+                or ""
+            )
+        return str(item or "")
+
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return default
+
+    def get_top_symbols(self) -> List[Dict[str, Any]]:
+        tickers = self.client.safe_get_tickers() or []
+        top_n = int(getattr(self.settings, "top_symbols_limit", 50) or 50)
+
+        rows: List[Dict[str, Any]] = []
+        for row in tickers:
+            inst_id = str(row.get("instId", ""))
+            if not inst_id.endswith("-SWAP"):
+                continue
+
+            quote_volume = self._safe_float(
+                row.get("volCcy24h", row.get("vol24h", 0.0)),
+                0.0,
+            )
+            last_price = self._safe_float(row.get("last", 0.0), 0.0)
+            change_24h = 0.0
+            open_24h = self._safe_float(row.get("open24h", 0.0), 0.0)
+            if open_24h > 0:
+                change_24h = (last_price - open_24h) / open_24h
+
+            rows.append(
+                {
+                    "instId": inst_id,
+                    "symbol": inst_id,
+                    "last_price": last_price,
+                    "quote_volume": quote_volume,
+                    "change_24h": change_24h,
+                }
+            )
+
+        rows.sort(key=lambda x: x["quote_volume"], reverse=True)
+        return rows[:top_n]
+
+    def _build_dataframe(self, raw: List[List[Any]]) -> pd.DataFrame:
+        parsed: List[Dict[str, Any]] = []
+        for c in raw:
+            if not isinstance(c, (list, tuple)) or len(c) < 6:
+                continue
             try:
-                # ✅ 正確呼叫（修復你爆炸的地方）
-                raw = self.client.safe_get_candles(symbol, timeframe, limit)
+                parsed.append(
+                    {
+                        "ts": int(c[0]),
+                        "open": float(c[1]),
+                        "high": float(c[2]),
+                        "low": float(c[3]),
+                        "close": float(c[4]),
+                        "volume": float(c[5]),
+                        "turnover": float(c[6]) if len(c) > 6 and c[6] not in (None, "") else 0.0,
+                    }
+                )
+            except Exception:
+                continue
 
-                if not raw or len(raw) < 20:
-                    logger.warning(f"[SCAN] {symbol} insufficient data")
+        df = pd.DataFrame(parsed)
+        if df.empty:
+            return df
+
+        df = df.sort_values("ts").reset_index(drop=True)
+        return df
+
+    def scan(self, symbols: List[Any]) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+
+        timeframe = getattr(self.settings, "primary_timeframe", "15m")
+        limit = int(getattr(self.settings, "candle_limit", 240) or 240)
+        min_rows = max(30, min(limit // 2, 120))
+
+        for item in symbols:
+            symbol = self._normalize_symbol(item)
+            if not symbol:
+                continue
+
+            try:
+                raw = self.client.safe_get_candles(symbol, timeframe, limit)
+                if not raw:
+                    logger.warning("[SCAN] %s no candle data", symbol)
                     continue
 
-                # ✅ 轉換 K線
-                candles = self._parse_candles(raw)
+                df = self._build_dataframe(raw)
+                if df.empty or len(df) < min_rows:
+                    logger.warning("[SCAN] %s insufficient candle rows=%s", symbol, len(df))
+                    continue
 
-                # ✅ 計算簡單指標（讓 AI 有東西吃）
-                signal = self._analyze(symbol, candles)
+                last_close = self._safe_float(df.iloc[-1]["close"], 0.0)
+                prev_close = self._safe_float(df.iloc[-2]["close"], last_close) if len(df) >= 2 else last_close
+                change_1 = ((last_close - prev_close) / prev_close) if prev_close else 0.0
 
-                if signal:
-                    results.append(signal)
+                if isinstance(item, dict):
+                    market_snapshot = {
+                        "symbol": symbol,
+                        "last_price": self._safe_float(item.get("last_price", last_close), last_close),
+                        "quote_volume": self._safe_float(item.get("quote_volume", 0.0), 0.0),
+                        "change_24h": self._safe_float(item.get("change_24h", 0.0), 0.0),
+                        "change_1": change_1,
+                    }
+                else:
+                    market_snapshot = {
+                        "symbol": symbol,
+                        "last_price": last_close,
+                        "quote_volume": 0.0,
+                        "change_24h": 0.0,
+                        "change_1": change_1,
+                    }
 
-                time.sleep(0.02)  # 防爆 API
+                results.append(
+                    {
+                        "symbol": symbol,
+                        "df": df,
+                        "market_snapshot": market_snapshot,
+                    }
+                )
 
-            except Exception as e:
-                logger.error(f"[SCAN ERROR] {symbol} {str(e)}")
+                time.sleep(0.02)
+            except Exception as exc:
+                logger.exception("[SCAN ERROR] %s %s", symbol, exc)
                 continue
 
         return results
-
-    # =========================
-    # 🔧 K線轉換
-    # =========================
-    def _parse_candles(self, raw):
-        parsed = []
-
-        for c in raw:
-            try:
-                parsed.append({
-                    "ts": int(c[0]),
-                    "open": float(c[1]),
-                    "high": float(c[2]),
-                    "low": float(c[3]),
-                    "close": float(c[4]),
-                    "volume": float(c[5])
-                })
-            except:
-                continue
-
-        return parsed
-
-    # =========================
-    # 🧠 AI前處理分析（不鎖死）
-    # =========================
-    def _analyze(self, symbol, candles):
-        closes = [c["close"] for c in candles]
-
-        if len(closes) < 20:
-            return None
-
-        # ===== 趨勢（非常輕量，避免限制AI）
-        ema_short = sum(closes[-5:]) / 5
-        ema_long = sum(closes[-20:]) / 20
-
-        trend = "long" if ema_short > ema_long else "short"
-
-        # ===== 波動（簡單 ATR）
-        ranges = [(c["high"] - c["low"]) for c in candles[-14:]]
-        atr = sum(ranges) / len(ranges)
-
-        confidence = min(1.0, abs(ema_short - ema_long) / (atr + 1e-6))
-
-        return {
-            "symbol": symbol,
-            "trend": trend,
-            "confidence": round(confidence, 4),
-            "price": closes[-1],
-            "atr": atr
-        }
