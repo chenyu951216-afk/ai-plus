@@ -135,6 +135,9 @@ class Settings:
     data_dir: str = os.getenv("DATA_DIR", "data").strip()
     state_dir: str = os.getenv("STATE_DIR", "state").strip()
 
+    set_leverage_before_entry: bool = _get_bool("SET_LEVERAGE_BEFORE_ENTRY", True)
+    skip_protective_if_entry_failed: bool = _get_bool("SKIP_PROTECTIVE_IF_ENTRY_FAILED", True)
+
     ui_host: str = os.getenv("UI_HOST", "0.0.0.0").strip()
     ui_port: int = int(os.getenv("UI_PORT", "8090"))
 
