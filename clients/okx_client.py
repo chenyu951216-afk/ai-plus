@@ -1,4 +1,3 @@
-import ast
 import base64
 import hmac
 import json
@@ -73,49 +72,53 @@ class OKXClient:
                 timeout=20,
             )
 
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError:
+            try:
+                payload = response.json()
+            except Exception:
+                raise
+            if isinstance(payload, dict):
+                raise RuntimeError(payload)
+            raise
+
         payload = response.json()
         if isinstance(payload, dict) and payload.get("code") not in (None, "0", 0):
             raise RuntimeError(payload)
         return payload
 
-    def _coerce_error_payload(self, exc: Exception) -> Optional[Dict[str, Any]]:
-        if isinstance(exc, RuntimeError):
-            raw = str(exc).strip()
-            if raw.startswith("{") and raw.endswith("}"):
-                try:
-                    payload = ast.literal_eval(raw)
-                except Exception:
-                    payload = None
-                if isinstance(payload, dict):
-                    return payload
+    def _extract_business_error(self, exc: Exception) -> dict | None:
+        try:
+            if len(exc.args) == 1 and isinstance(exc.args[0], dict):
+                return exc.args[0]
+        except Exception:
+            return None
         return None
 
-    def _is_business_rejection_payload(self, payload: Dict[str, Any]) -> bool:
-        code = str(payload.get("code", ""))
-        return code not in ("", "0")
-
-    def _should_suppress_error_log(self, fn_name: str, exc: Exception, payload: Optional[Dict[str, Any]] = None) -> bool:
+    def _should_suppress_error_log(self, fn_name: str, exc: Exception) -> bool:
         text = str(exc)
         if fn_name == "get_max_avail_size" and "51010" in text and "current account mode" in text.lower():
             return True
-        if payload and self._is_business_rejection_payload(payload):
-            return True
-        return False
+        payload = self._extract_business_error(exc)
+        if not payload:
+            return False
+        code = str(payload.get("code", ""))
+        items = payload.get("data") or []
+        scode = str(items[0].get("sCode", "")) if items and isinstance(items[0], dict) else ""
+        known_codes = {"51008", "51010", "51121", "51250"}
+        return code == "1" and scode in known_codes
 
     def _safe(self, fn, default, *args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except Exception as exc:
             fn_name = getattr(fn, "__name__", "")
-            payload = self._coerce_error_payload(exc)
-            if self._should_suppress_error_log(fn_name, exc, payload):
-                if payload:
-                    self.logger.warning("okx business rejection on %s: %s", fn_name, payload)
-                    return payload
-                self.logger.info("okx soft-fallback on %s: %s", fn_name, exc)
-            else:
-                self.logger.exception("okx error: %s", exc)
+            payload = self._extract_business_error(exc)
+            if self._should_suppress_error_log(fn_name, exc):
+                self.logger.warning("okx business rejection on %s: %s", fn_name, payload or exc)
+                return payload or default
+            self.logger.exception("okx error: %s", exc)
             return default
 
     def get_balance(self) -> Dict[str, Any]:
