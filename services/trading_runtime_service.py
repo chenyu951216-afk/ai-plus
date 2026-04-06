@@ -432,7 +432,7 @@ class TradingRuntimeService:
                     execution.get("entry_price"),
                     candidate.get("preflight", {}).get("reason", "ok"),
                 )
-                if execution.get("execution_mode") != "blocked":
+                if execution.get("order_success", False):
                     protective = self.protect.register(execution, pos_mode)
                     protective_orders.append(protective)
                     self.logger.info(
