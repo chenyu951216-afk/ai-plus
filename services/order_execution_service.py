@@ -44,6 +44,17 @@ class OrderExecutionService:
         last_price = float(candidate.get("market_snapshot", {}).get("last_price", 0.0) or 0.0)
         available_usdt = float(account_summary.get("available_equity", account_summary.get("equity", 0.0)) or 0.0)
         desired_size = self._estimate_size(last_price, available_usdt, leverage, margin_pct, size_multiplier)
+
+        preflight_final_size = preflight.get("final_size")
+        if preflight_final_size is None:
+            preflight_final_size = preflight.get("adjusted_size")
+        final_size = float(preflight_final_size if preflight_final_size not in (None, "", 0, 0.0) else desired_size)
+
+        preflight_entry_price = preflight.get("entry_price")
+        if preflight_entry_price is None:
+            preflight_entry_price = preflight.get("price")
+        entry_price = preflight_entry_price if preflight_entry_price not in (None, "") else last_price
+
         pos_side = self._position_pos_side(pos_mode, candidate["side"])
         order_side = "buy" if candidate["side"] == "long" else "sell"
         result = (
@@ -51,7 +62,7 @@ class OrderExecutionService:
                 inst_id=candidate["symbol"],
                 side=order_side,
                 pos_side=pos_side,
-                size=desired_size,
+                size=final_size,
                 order_type="market",
                 price=None,
                 reduce_only=False,
@@ -67,7 +78,8 @@ class OrderExecutionService:
             "execution_mode": "live" if settings.enable_live_execution else "paper",
             "order_result": result,
             "desired_size": desired_size,
-            "final_size": desired_size,
+            "final_size": final_size,
+            "entry_price": entry_price,
             "size_multiplier": size_multiplier,
             "leverage": leverage,
             "margin_pct": margin_pct,
