@@ -1,3 +1,4 @@
+import ast
 import base64
 import hmac
 import json
@@ -78,10 +79,27 @@ class OKXClient:
             raise RuntimeError(payload)
         return payload
 
-    def _should_suppress_error_log(self, fn_name: str, exc: Exception) -> bool:
+    def _coerce_error_payload(self, exc: Exception) -> Optional[Dict[str, Any]]:
+        if isinstance(exc, RuntimeError):
+            raw = str(exc).strip()
+            if raw.startswith("{") and raw.endswith("}"):
+                try:
+                    payload = ast.literal_eval(raw)
+                except Exception:
+                    payload = None
+                if isinstance(payload, dict):
+                    return payload
+        return None
+
+    def _is_business_rejection_payload(self, payload: Dict[str, Any]) -> bool:
+        code = str(payload.get("code", ""))
+        return code not in ("", "0")
+
+    def _should_suppress_error_log(self, fn_name: str, exc: Exception, payload: Optional[Dict[str, Any]] = None) -> bool:
         text = str(exc)
-        # OKX 51010 on max-avail-size under current account mode is expected in your setup.
         if fn_name == "get_max_avail_size" and "51010" in text and "current account mode" in text.lower():
+            return True
+        if payload and self._is_business_rejection_payload(payload):
             return True
         return False
 
@@ -90,7 +108,11 @@ class OKXClient:
             return fn(*args, **kwargs)
         except Exception as exc:
             fn_name = getattr(fn, "__name__", "")
-            if self._should_suppress_error_log(fn_name, exc):
+            payload = self._coerce_error_payload(exc)
+            if self._should_suppress_error_log(fn_name, exc, payload):
+                if payload:
+                    self.logger.warning("okx business rejection on %s: %s", fn_name, payload)
+                    return payload
                 self.logger.info("okx soft-fallback on %s: %s", fn_name, exc)
             else:
                 self.logger.exception("okx error: %s", exc)
