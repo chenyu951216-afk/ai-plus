@@ -46,7 +46,11 @@ class MarketPipelineService:
 
     def get_top_symbols(self) -> List[Dict[str, Any]]:
         tickers = self.client.safe_get_tickers() or []
-        top_n = int(getattr(self.settings, "top_symbols_limit", 50) or 50)
+        top_n = int(
+            getattr(self.settings, "scan_top_n", None)
+            or getattr(self.settings, "top_symbols_limit", None)
+            or 50
+        )
 
         rows: List[Dict[str, Any]] = []
         for row in tickers:
@@ -75,6 +79,7 @@ class MarketPipelineService:
             )
 
         rows.sort(key=lambda x: x["quote_volume"], reverse=True)
+        logger.info("[PIPELINE] selected top symbols count=%s from tickers=%s", min(len(rows), top_n), len(tickers))
         return rows[:top_n]
 
     def _build_dataframe(self, raw: List[List[Any]]) -> pd.DataFrame:
