@@ -74,7 +74,7 @@ class Settings:
 
     max_live_entries_per_cycle: int = int(os.getenv("MAX_LIVE_ENTRIES_PER_CYCLE", "4"))
     max_open_positions: int = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
-    max_total_risk_pct: float = float(os.getenv("MAX_TOTAL_RISK_PCT", "0.18"))
+    max_total_risk_pct: float = float(os.getenv("MAX_TOTAL_RISK_PCT", "0.75"))
     max_consecutive_losses_before_pause: int = int(os.getenv("MAX_CONSECUTIVE_LOSSES_BEFORE_PAUSE", "10"))
 
     min_trade_confidence: float = float(os.getenv("MIN_TRADE_CONFIDENCE", "0.53"))
@@ -92,8 +92,8 @@ class Settings:
 
     default_leverage_min: int = int(os.getenv("DEFAULT_LEVERAGE_MIN", "3"))
     default_leverage_max: int = int(os.getenv("DEFAULT_LEVERAGE_MAX", "20"))
-    default_margin_pct_min: float = float(os.getenv("DEFAULT_MARGIN_PCT_MIN", "0.01"))
-    default_margin_pct_max: float = float(os.getenv("DEFAULT_MARGIN_PCT_MAX", "0.08"))
+    default_margin_pct_min: float = float(os.getenv("DEFAULT_MARGIN_PCT_MIN", "0.003"))
+    default_margin_pct_max: float = float(os.getenv("DEFAULT_MARGIN_PCT_MAX", "0.03"))
 
     adaptive_min_trade_confidence_floor: float = float(os.getenv("ADAPTIVE_MIN_TRADE_CONFIDENCE_FLOOR", "0.45"))
     adaptive_min_trade_confidence_ceiling: float = float(os.getenv("ADAPTIVE_MIN_TRADE_CONFIDENCE_CEILING", "0.72"))
@@ -119,6 +119,10 @@ class Settings:
     td_mode: str = os.getenv("TD_MODE", "cross").strip()
     force_pos_side_in_net_mode: bool = _get_bool("FORCE_POS_SIDE_IN_NET_MODE", False)
 
+    set_leverage_before_entry: bool = _get_bool("SET_LEVERAGE_BEFORE_ENTRY", True)
+    skip_protective_if_entry_failed: bool = _get_bool("SKIP_PROTECTIVE_IF_ENTRY_FAILED", True)
+    protect_price_guard_enabled: bool = _get_bool("PROTECT_PRICE_GUARD_ENABLED", True)
+
     ai_controls_entry: bool = _get_bool("AI_CONTROLS_ENTRY", True)
     ai_controls_sizing: bool = _get_bool("AI_CONTROLS_SIZING", True)
     ai_controls_leverage: bool = _get_bool("AI_CONTROLS_LEVERAGE", True)
@@ -134,9 +138,6 @@ class Settings:
 
     data_dir: str = os.getenv("DATA_DIR", "data").strip()
     state_dir: str = os.getenv("STATE_DIR", "state").strip()
-
-    set_leverage_before_entry: bool = _get_bool("SET_LEVERAGE_BEFORE_ENTRY", True)
-    skip_protective_if_entry_failed: bool = _get_bool("SKIP_PROTECTIVE_IF_ENTRY_FAILED", True)
 
     ui_host: str = os.getenv("UI_HOST", "0.0.0.0").strip()
     ui_port: int = int(os.getenv("UI_PORT", "8090"))
